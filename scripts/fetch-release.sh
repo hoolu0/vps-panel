@@ -36,4 +36,5 @@ else
 fi
 
 [ -f "$BIN" ] || { echo "下载后仍缺少 $BIN"; exit 1; }
+chmod +x "$BIN"
 echo "已下载 $BIN"

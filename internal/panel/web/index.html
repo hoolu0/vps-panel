@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VPS 面板</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="login-view" class="login-wrap hidden">
+  <form id="login-form" class="login-card">
+    <h1>VPS 面板</h1>
+    <p class="muted">轻 agent 架构 · 状态 / 线路 / 协议部署</p>
+    <input type="password" id="login-password" placeholder="管理员密码" autocomplete="current-password">
+    <button type="submit" class="btn primary w100">登录</button>
+    <p id="login-error" class="error"></p>
+  </form>
+</div>
+
+<div id="app-view" class="hidden">
+  <header class="topbar">
+    <div class="brand">🖥️ VPS 面板 <span class="muted small" id="version"></span></div>
+    <div class="top-actions">
+      <button class="btn primary" id="btn-add">＋ 添加 VPS</button>
+      <button class="btn" id="btn-settings">设置</button>
+      <button class="btn ghost" id="btn-logout">退出</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="summary" class="summary"></section>
+    <section id="node-grid" class="grid"></section>
+    <section id="node-detail" class="hidden"></section>
+  </main>
+</div>
+
+<!-- add node modal -->
+<div id="modal-add" class="modal hidden">
+  <div class="modal-card wide">
+    <div class="modal-head"><h2>添加 VPS</h2><button class="btn ghost close-modal">✕</button></div>
+    <form id="add-form">
+      <div class="form-grid">
+        <label>名称<input name="name" required placeholder="如 香港-01"></label>
+        <label>IP<input name="ip" required placeholder="1.2.3.4"></label>
+        <label>SSH 端口<input name="ssh_port" type="number" value="22" required></label>
+        <label>用户名<input name="username" value="root"></label>
+        <label>登录方式
+          <select name="auth_type" id="auth-type">
+            <option value="password">密码</option>
+            <option value="key">密钥</option>
+          </select>
+        </label>
+        <label id="fld-password">密码<input name="password" type="password" autocomplete="off"></label>
+        <label id="fld-key" class="hidden span2">私钥<textarea name="private_key" rows="5" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
+        <label id="fld-keypass" class="hidden">私钥口令（可选）<input name="key_passphrase" type="password" autocomplete="off"></label>
+        <label>时区（初始化时设置）
+          <input name="timezone" list="tz-list" value="Asia/Shanghai">
+          <datalist id="tz-list">
+            <option value="Asia/Shanghai"></option><option value="Asia/Hong_Kong"></option>
+            <option value="Asia/Tokyo"></option><option value="Asia/Singapore"></option>
+            <option value="UTC"></option><option value="Europe/London"></option>
+            <option value="Europe/Berlin"></option><option value="America/New_York"></option>
+            <option value="America/Los_Angeles"></option><option value="Australia/Sydney"></option>
+          </datalist>
+        </label>
+        <label>新 SSH 端口（初始化时修改，可空）<input name="new_ssh_port" type="number" placeholder="如 2222"></label>
+        <label class="check span2"><input type="checkbox" name="run_init" checked> 接入后自动执行初始化模板（更新/工具/时区/SSH端口/fail2ban/ufw/BBR/swap）</label>
+      </div>
+      <p class="muted small">密码/私钥仅用于本次接入安装 agent，不会保存。</p>
+      <div class="modal-foot">
+        <span id="add-status" class="muted"></span>
+        <button type="button" class="btn close-modal">取消</button>
+        <button type="submit" class="btn primary" id="add-submit">接入</button>
+      </div>
+      <pre id="add-logs" class="logs hidden"></pre>
+    </form>
+  </div>
+</div>
+
+<!-- settings modal -->
+<div id="modal-settings" class="modal hidden">
+  <div class="modal-card wide">
+    <div class="modal-head"><h2>设置</h2><button class="btn ghost close-modal">✕</button></div>
+    <div class="tabs">
+      <button class="tab active" data-tab="general">通用</button>
+      <button class="tab" data-tab="targets">探测目标</button>
+      <button class="tab" data-tab="routes">线路数据源（去程）</button>
+      <button class="tab" data-tab="tokens">API Token</button>
+      <button class="tab" data-tab="password">修改密码</button>
+    </div>
+    <div class="tab-page" data-page="general">
+      <label class="block">面板对外地址（agent 连接用，如 https://panel.example.com；留空则用访问地址）
+        <input id="set-public-addr" placeholder="https://panel.example.com"></label>
+      <label class="block">三网延迟探测间隔（分钟）<input id="set-probe-interval" type="number" min="1" value="5"></label>
+      <button class="btn primary" id="set-save-general">保存</button>
+    </div>
+    <div class="tab-page hidden" data-page="targets">
+      <p class="muted small">agent 周期性探测这些目标（电信/联通/移动，IPv4+IPv6）。可自由增删。</p>
+      <table class="tbl" id="targets-table"><thead><tr><th>名称</th><th>运营商</th><th>IP</th><th>协议</th><th></th></tr></thead><tbody></tbody></table>
+      <button class="btn" id="target-add">＋ 添加目标</button>
+      <button class="btn primary" id="set-save-targets">保存</button>
+    </div>
+    <div class="tab-page hidden" data-page="routes">
+      <p class="muted small">去程线路通过数据源查询：填写 URL 模板，用 {ip} 代表节点 IP（可以是你自建的查询接口或其他数据源）。</p>
+      <table class="tbl" id="routes-table"><thead><tr><th>名称</th><th>URL 模板</th><th></th></tr></thead><tbody></tbody></table>
+      <button class="btn" id="route-add">＋ 添加数据源</button>
+      <button class="btn primary" id="set-save-routes">保存</button>
+    </div>
+    <div class="tab-page hidden" data-page="tokens">
+      <p class="muted small">给 Hermes 等外部系统调用 <code>/api/v1</code> 用：请求头 <code>Authorization: Bearer &lt;token&gt;</code>。</p>
+      <div id="token-list"></div>
+      <div class="row"><input id="token-name" placeholder="名称（如 hermes）"><button class="btn primary" id="token-create">新建 Token</button></div>
+      <pre id="token-new" class="logs hidden"></pre>
+    </div>
+    <div class="tab-page hidden" data-page="password">
+      <label class="block">原密码<input id="pw-old" type="password"></label>
+      <label class="block">新密码<input id="pw-new" type="password"></label>
+      <button class="btn primary" id="pw-save">修改密码</button>
+    </div>
+  </div>
+</div>
+
+<!-- task modal -->
+<div id="modal-task" class="modal hidden">
+  <div class="modal-card wide">
+    <div class="modal-head"><h2 id="task-title">任务</h2><button class="btn ghost close-modal">✕</button></div>
+    <p id="task-meta" class="muted"></p>
+    <pre id="task-logs" class="logs tall"></pre>
+  </div>
+</div>
+
+<!-- qr modal -->
+<div id="modal-qr" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-head"><h2>分享二维码</h2><button class="btn ghost close-modal">✕</button></div>
+    <div class="qr-wrap"><img id="qr-img" alt="二维码"></div>
+    <pre id="qr-link" class="logs"></pre>
+    <button class="btn w100" id="qr-copy">复制链接</button>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>

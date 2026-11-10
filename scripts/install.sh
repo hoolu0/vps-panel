@@ -18,8 +18,8 @@ BIN="dist/vps-panel-linux-$ARCH"
 if [ ! -f "$BIN" ]; then
   if command -v go >/dev/null 2>&1; then
     ./scripts/build.sh
-  else
-    echo "缺少 $BIN 且本机没有 Go 工具链；请先在有 Go 的机器上运行 scripts/build.sh 后同步 dist/ 过来"
+  elif ! ./scripts/fetch-release.sh; then
+    echo "缺少 $BIN：本机没有 Go 工具链，且无法从 GitHub Release 下载（需要 gh 登录或 GITHUB_TOKEN）；请先在有 Go 的机器上运行 scripts/build.sh 后同步 dist/ 过来"
     exit 1
   fi
 fi

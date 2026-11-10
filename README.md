@@ -41,6 +41,10 @@ cd vps-panel
 sudo ./scripts/install.sh # 代码 /opt/vps-panel，数据 /var/lib/vps-panel
 ```
 
+本机没有 Go 时，`install.sh` 会改从 GitHub Release 下载预编译好的面板二进制
+（仓库是私有的，需要 `gh` 登录或 `GITHUB_TOKEN`）。Release 由打 tag 自动生成，
+见 `.github/workflows/release.yml`，例如 `git tag v0.1.0 && git push --tags`。
+
 首次启动的管理员密码在日志里：`journalctl -u vps-panel | grep 管理员密码`，
 也可以安装前设置环境变量 `PANEL_ADMIN_PASSWORD` 预设（仅首次生效）。
 

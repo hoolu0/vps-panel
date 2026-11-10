@@ -20,7 +20,15 @@ case "$ARCH" in
   aarch64|arm64) ARCH=arm64 ;;
 esac
 BIN="dist/vps-panel-linux-$ARCH"
-[ -f "$BIN" ] || { echo "缺少 $BIN（需要 Go 构建或预先同步 dist/）"; exit 1; }
+if command -v go >/dev/null 2>&1; then
+  # 上面已重新构建；构建失败会因 set -e 直接退出
+  [ -f "$BIN" ] || { echo "构建后仍缺少 $BIN"; exit 1; }
+else
+  # 没有 Go 时必须重新下载：dist/ 里残留的是上次安装的旧二进制，
+  # 不删掉它 fetch-release.sh 会直接退出，更新就等于没更新
+  rm -f "$BIN"
+  ./scripts/fetch-release.sh || { echo "缺少 $BIN（需要 Go 构建、预先同步 dist/，或从 GitHub Release 下载）"; exit 1; }
+fi
 
 echo "==> 替换二进制并重启（数据目录 /var/lib/vps-panel 不受影响）"
 install -m 755 "$BIN" /opt/vps-panel/vps-panel

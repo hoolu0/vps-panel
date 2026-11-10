@@ -1,0 +1,32 @@
+# Build panel + agent binaries and attach them to a GitHub Release.
+# Trigger: push a version tag, e.g. `git tag v0.1.0 && git push --tags`.
+# The release binaries let a panel VPS install/update without a Go toolchain
+# (scripts/fetch-release.sh downloads them; the repo is private, so the
+# download needs `gh` logged in or GITHUB_TOKEN).
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - run: ./scripts/build.sh
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/vps-panel-linux-amd64
+            dist/vps-panel-linux-arm64
+            dist/vps-agent-linux-amd64
+            dist/vps-agent-linux-arm64
+          generate_release_notes: true

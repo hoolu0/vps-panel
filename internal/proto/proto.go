@@ -116,7 +116,7 @@ type DeployParams struct {
 }
 
 // Version of the panel/agent build.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // FinalizeParams are the parameters of the finalize_ssh task, sent by the
 // panel after it has verified the new SSH port is reachable.
@@ -146,6 +146,12 @@ type Deployment struct {
 	// Shadowsocks 2022
 	Method   string `json:"method,omitempty"`
 	Password string `json:"password,omitempty"`
+	// Panel-side public endpoint override (e.g. NAT port mapping where the
+	// external host/port differs from the listen endpoint). Used only when
+	// composing share links on the panel; never sent to the agent, which
+	// keeps listening on Port.
+	PublicHost string `json:"public_host,omitempty"`
+	PublicPort int    `json:"public_port,omitempty"`
 }
 
 // ProbeTarget is one latency probe destination.

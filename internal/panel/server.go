@@ -1,10 +1,12 @@
 package panel
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -60,6 +62,12 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /agent/ws", s.handleAgentWS)
 
+	// Public agent distribution for manual onboarding: the install script
+	// contains no secrets, and the agent binary is not a secret either
+	// (node tokens are what authenticate agents).
+	mux.HandleFunc("GET /install-agent.sh", s.handleInstallScript)
+	mux.HandleFunc("GET /dl/agent/{arch}", s.handleDownloadAgent)
+
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	mux.HandleFunc("POST /api/logout", s.auth(s.handleLogout))
 	mux.HandleFunc("GET /api/me", s.auth(func(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +86,9 @@ func (s *Server) Handler() http.Handler {
 	// admin-only (session or token; token scope is fleet management too,
 	// but node creation carries SSH credentials, so keep it on /api only)
 	mux.HandleFunc("POST /api/nodes", s.auth(s.handleAddNode))
+	mux.HandleFunc("POST /api/nodes/manual", s.auth(s.handleAddNodeManual))
+	mux.HandleFunc("GET /api/nodes/{id}/install-command", s.auth(s.handleInstallCommand))
+	mux.HandleFunc("PUT /api/nodes/{id}/deployments/{dep}/endpoint", s.auth(s.handleSetEndpoint))
 	mux.HandleFunc("DELETE /api/nodes/{id}", s.auth(s.handleDeleteNode))
 	mux.HandleFunc("POST /api/nodes/{id}/init", s.auth(s.handleInit))
 	mux.HandleFunc("POST /api/nodes/{id}/finalize-ssh", s.auth(s.handleFinalizeSSH))
@@ -289,14 +300,20 @@ func (s *Server) nodeView(n *Node) map[string]any {
 	m["online"] = s.hub.Online(n.ID)
 	deps := make([]map[string]any, 0, len(n.Deployments))
 	for _, d := range n.Deployments {
-		db, _ := json.Marshal(d)
-		var dm map[string]any
-		_ = json.Unmarshal(db, &dm)
-		dm["link"] = ComposeLink(n, d)
-		deps = append(deps, dm)
+		deps = append(deps, s.deploymentView(n, d))
 	}
 	m["deployments"] = deps
 	return m
+}
+
+// deploymentView renders one deployment for API responses, including the
+// composed share link.
+func (s *Server) deploymentView(n *Node, d proto.Deployment) map[string]any {
+	db, _ := json.Marshal(d)
+	var dm map[string]any
+	_ = json.Unmarshal(db, &dm)
+	dm["link"] = ComposeLink(n, d)
+	return dm
 }
 
 func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
@@ -391,6 +408,86 @@ func (s *Server) panelBase(r *http.Request) string {
 	return scheme + "://" + r.Host
 }
 
+// --- manual onboarding (no SSH) ----------------------------------------------
+
+// installCommand builds the one-liner the user runs as root on the VPS.
+// It contains the node's agent token, so it is only ever returned from
+// authenticated endpoints and never logged.
+func (s *Server) installCommand(r *http.Request, n *Node) string {
+	base := s.panelBase(r)
+	return fmt.Sprintf("curl -fsSL %s/install-agent.sh | bash -s -- --panel %s --token %s", base, base, n.Token)
+}
+
+// handleAddNodeManual creates a node without touching SSH. The caller runs
+// the returned install command on the VPS; the node comes online on its own.
+func (s *Server) handleAddNodeManual(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name     string `json:"name"`
+		IP       string `json:"ip"`
+		Timezone string `json:"timezone"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeErr(w, 400, "bad request")
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		writeErr(w, 400, "name 必填")
+		return
+	}
+	node := &Node{
+		ID: NewID("node-"), Name: body.Name, IP: strings.TrimSpace(body.IP),
+		Token: NewSecret(24), CreatedAt: time.Now(), Timezone: body.Timezone,
+	}
+	if err := s.store.Update(func(d *Data) { d.Nodes = append(d.Nodes, node) }); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"node":            s.nodeView(node),
+		"install_command": s.installCommand(r, node),
+	})
+}
+
+// handleInstallCommand returns the install command for an existing node
+// (so it can be re-displayed from the node detail page).
+func (s *Server) handleInstallCommand(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var node *Node
+	s.store.View(func(d *Data) { node = FindNode(d, id) })
+	if node == nil {
+		writeErr(w, 404, "node not found")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"install_command": s.installCommand(r, node)})
+}
+
+// handleInstallScript serves the agent install script (no secrets in it).
+func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
+	b, err := fs.ReadFile(webFS, "web/install-agent.sh")
+	if err != nil {
+		writeErr(w, 500, "install script missing")
+		return
+	}
+	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	_, _ = w.Write(b)
+}
+
+// handleDownloadAgent serves the embedded agent binary for one arch.
+func (s *Server) handleDownloadAgent(w http.ResponseWriter, r *http.Request) {
+	arch := r.PathValue("arch")
+	if arch != "amd64" && arch != "arm64" {
+		writeErr(w, 404, "unknown arch")
+		return
+	}
+	bin, err := agentBinary(arch)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	w.Header().Set("Content-Disposition", "attachment; filename=vps-agent-linux-"+arch)
+	http.ServeContent(w, r, "vps-agent-linux-"+arch, time.Time{}, bytes.NewReader(bin))
+}
+
 func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	_ = s.store.Update(func(d *Data) {
@@ -473,6 +570,10 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		Port       int    `json:"port"`
 		Dest       string `json:"dest"`
 		ServerName string `json:"server_name"`
+		// Optional panel-side public endpoint override (NAT): share links
+		// are composed with it; the agent still listens on Port.
+		PublicHost string `json:"public_host"`
+		PublicPort int    `json:"public_port"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeErr(w, 400, "bad request")
@@ -482,13 +583,75 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "不支持的协议模块")
 		return
 	}
-	s.dispatchOrErr(w, id, proto.TaskDeploy, proto.DeployParams{
-		DeploymentID: NewID("dep-"), Module: body.Module, Port: body.Port,
+	if body.PublicPort < 0 || body.PublicPort > 65535 {
+		writeErr(w, 400, "对外端口不合法")
+		return
+	}
+	depID := NewID("dep-")
+	body.PublicHost = strings.TrimSpace(body.PublicHost)
+	if body.PublicHost != "" || body.PublicPort > 0 {
+		// Stash the override before dispatching: the deploy task result
+		// (which creates the deployment record) consumes it in the hub.
+		_ = s.store.Update(func(d *Data) {
+			if d.PendingEndpoints == nil {
+				d.PendingEndpoints = map[string]EndpointOverride{}
+			}
+			d.PendingEndpoints[depID] = EndpointOverride{PublicHost: body.PublicHost, PublicPort: body.PublicPort}
+		})
+	}
+	rec, err := s.hub.Dispatch(id, proto.TaskDeploy, proto.DeployParams{
+		DeploymentID: depID, Module: body.Module, Port: body.Port,
 		Dest: body.Dest, ServerName: body.ServerName,
 	})
+	if err != nil {
+		_ = s.store.Update(func(d *Data) { delete(d.PendingEndpoints, depID) })
+		writeErr(w, 404, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"task": rec})
+}
+
+// handleSetEndpoint updates (or clears, with empty host and port 0) the
+// public endpoint override of one deployment and returns the updated
+// deployment including its recomposed share link.
+func (s *Server) handleSetEndpoint(w http.ResponseWriter, r *http.Request) {
+	id, depID := r.PathValue("id"), r.PathValue("dep")
+	var body struct {
+		PublicHost string `json:"public_host"`
+		PublicPort int    `json:"public_port"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeErr(w, 400, "bad request")
+		return
+	}
+	if body.PublicPort < 0 || body.PublicPort > 65535 {
+		writeErr(w, 400, "对外端口不合法")
+		return
+	}
+	body.PublicHost = strings.TrimSpace(body.PublicHost)
+	var out map[string]any
+	_ = s.store.Update(func(d *Data) {
+		n := FindNode(d, id)
+		if n == nil {
+			return
+		}
+		for i := range n.Deployments {
+			if n.Deployments[i].ID == depID {
+				n.Deployments[i].PublicHost = body.PublicHost
+				n.Deployments[i].PublicPort = body.PublicPort
+				out = s.deploymentView(n, n.Deployments[i])
+			}
+		}
+	})
+	if out == nil {
+		writeErr(w, 404, "deployment not found")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"deployment": out})
 }
 
 func (s *Server) handleUndeploy(w http.ResponseWriter, r *http.Request) {
+	_ = s.store.Update(func(d *Data) { delete(d.PendingEndpoints, r.PathValue("dep")) })
 	s.dispatchOrErr(w, r.PathValue("id"), proto.TaskUndeploy, proto.UndeployParams{DeploymentID: r.PathValue("dep")})
 }
 

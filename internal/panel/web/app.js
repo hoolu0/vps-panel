@@ -105,7 +105,7 @@ function renderGrid() {
     return `<div class="node-card" data-action="open" data-id="${n.id}">
       <div class="node-head"><span class="node-name"><span class="dot ${n.online ? 'on' : 'off'}"></span>${esc(n.name)}</span>
       <span class="badge">${esc(st.arch || '')}</span></div>
-      <div class="node-ip">${esc(n.ip)} · SSH ${n.ssh_port}${n.new_ssh_port ? ' → ' + n.new_ssh_port + '（待收尾）' : ''} · ${esc((n.hello && n.hello.os) || st.os || '')}</div>
+      <div class="node-ip">${esc(n.ip)}${n.ssh_port ? ' · SSH ' + n.ssh_port : ' · 手动安装'}${n.new_ssh_port ? ' → ' + n.new_ssh_port + '（待收尾）' : ''} · ${esc((n.hello && n.hello.os) || st.os || '')}</div>
       ${n.online && n.status ? `
       ${meter('CPU', st.cpu_percent, 100, st.cpu_percent.toFixed(1) + '%')}
       ${meter('内存', st.mem_used, st.mem_total)}
@@ -126,6 +126,7 @@ function renderDetail() {
   const el = $('#node-detail');
   el.classList.remove('hidden');
   const st = n.status || {};
+  const neverSeen = !n.last_seen || String(n.last_seen).startsWith('0001');
   const probes = (n.probes && n.probes.results) || [];
   const byCarrier = {};
   probes.forEach(r => { (byCarrier[r.carrier] = byCarrier[r.carrier] || []).push(r); });
@@ -134,9 +135,10 @@ function renderDetail() {
   <div class="detail-head">
     <button class="btn" data-action="back">← 返回</button>
     <h2><span class="dot ${n.online ? 'on' : 'off'}"></span>${esc(n.name)}</h2>
-    <span class="muted">${esc(n.ip)} · SSH 端口 ${n.ssh_port}</span>
+    <span class="muted">${esc(n.ip)}${n.ssh_port ? ' · SSH 端口 ' + n.ssh_port : ' · 手动安装'}</span>
     ${n.online ? '<span class="badge">在线</span>' : '<span class="badge">离线</span>'}
     <span style="flex:1"></span>
+    ${neverSeen ? '<button class="btn" data-action="install-cmd">查看安装命令</button>' : ''}
     <button class="btn danger" data-action="delete-node">删除节点</button>
   </div>
 
@@ -168,10 +170,12 @@ function renderDetail() {
     ${(n.deployments || []).map(d => `<div class="dep">
       <span class="badge proto">${esc(MODULE_CN[d.module] || d.module)}</span>
       <span>端口 <b>${d.port}</b></span>
+      ${(d.public_host || d.public_port) ? `<span class="muted small">对外 ${esc(d.public_host || n.ip)}:${d.public_port || d.port}</span>` : ''}
       <span class="link">${esc(d.link || '')}</span>
       <span>
         <button class="btn small" data-action="copy" data-link="${esc(d.link || '')}">复制</button>
         <button class="btn small" data-action="qr" data-id="${d.id}" data-link="${esc(d.link || '')}">二维码</button>
+        <button class="btn small" data-action="endpoint" data-id="${d.id}" data-host="${esc(d.public_host || '')}" data-port="${d.public_port || ''}">对外地址</button>
         <button class="btn small danger" data-action="undeploy" data-id="${d.id}">卸载</button>
       </span>
     </div>`).join('') || '<p class="muted">还没部署协议</p>'}
@@ -182,6 +186,8 @@ function renderDetail() {
         <option value="ss2022">Shadowsocks 2022</option>
       </select>
       <input id="dep-port" type="number" placeholder="端口（空=随机）" style="max-width:170px">
+      <input id="dep-pubhost" placeholder="对外地址（NAT 可选，空=节点IP）" style="max-width:230px">
+      <input id="dep-pubport" type="number" placeholder="对外端口（可选）" style="max-width:150px">
       <input id="dep-dest" placeholder="Reality 目标（默认 www.microsoft.com:443）" style="max-width:320px">
       <button class="btn primary" data-action="deploy" ${n.online ? '' : 'disabled'}>部署</button>
       <button class="btn" data-action="restart-proto" ${n.online ? '' : 'disabled'}>重启协议服务</button>
@@ -265,11 +271,53 @@ $('#auth-type').addEventListener('change', e => {
   $('#fld-key').classList.toggle('hidden', !key);
   $('#fld-keypass').classList.toggle('hidden', !key);
 });
-$('#btn-add').addEventListener('click', () => { $('#add-logs').classList.add('hidden'); $('#add-status').textContent = ''; openModal('#modal-add'); });
+$('#btn-add').addEventListener('click', () => { $('#add-logs').classList.add('hidden'); $('#manual-result').classList.add('hidden'); $('#add-status').textContent = ''; applyAddMode(); openModal('#modal-add'); });
+
+// add-node mode: SSH install vs manual install
+const SSH_ONLY_FIELDS = ['#fld-sshport', '#fld-user', '#fld-authtype', '#fld-password', '#fld-key', '#fld-keypass', '#fld-newport', '#fld-runinit'];
+function addMode() { const r = $('input[name=add_mode]:checked'); return r ? r.value : 'ssh'; }
+function applyAddMode() {
+  const manual = addMode() === 'manual';
+  SSH_ONLY_FIELDS.forEach(sel => {
+    const el = $(sel);
+    el.classList.toggle('hidden', manual);
+    $$('input,select,textarea', el).forEach(i => { i.disabled = manual; });
+  });
+  const ipInput = $('#fld-ip input');
+  ipInput.required = !manual;
+  ipInput.placeholder = manual ? '可空，如 NAT 网关地址' : '1.2.3.4';
+  $('#ip-label-text').textContent = manual ? '公网地址（可选）' : 'IP';
+  $('#add-ssh-hint').classList.toggle('hidden', manual);
+  $('#add-manual-hint').classList.toggle('hidden', !manual);
+  if (!manual) $('#manual-result').classList.add('hidden');
+  $('#add-submit').textContent = manual ? '创建节点' : '接入';
+}
+$$('input[name=add_mode]').forEach(r => r.addEventListener('change', applyAddMode));
+$('#install-cmd-copy').addEventListener('click', async () => {
+  await navigator.clipboard.writeText($('#install-cmd').value);
+  toast('安装命令已复制');
+});
 
 $('#add-form').addEventListener('submit', async e => {
   e.preventDefault();
   const fd = new FormData(e.target);
+  if (addMode() === 'manual') {
+    $('#add-submit').disabled = true;
+    $('#add-status').textContent = '正在创建节点…';
+    try {
+      const data = await api('/api/nodes/manual', { method: 'POST', body: JSON.stringify({
+        name: fd.get('name'), ip: (fd.get('ip') || '').trim(), timezone: fd.get('timezone') || '',
+      }) });
+      $('#install-cmd').value = data.install_command;
+      $('#manual-result').classList.remove('hidden');
+      $('#add-status').textContent = '节点已创建，复制命令到 VPS 上执行即可上线';
+      toast('节点已添加');
+      refresh();
+    } catch (err) {
+      $('#add-status').textContent = '创建失败：' + err.message;
+    } finally { $('#add-submit').disabled = false; }
+    return;
+  }
   const body = {
     name: fd.get('name'), ip: fd.get('ip'), ssh_port: Number(fd.get('ssh_port')),
     username: fd.get('username') || 'root', auth_type: fd.get('auth_type'),
@@ -408,9 +456,26 @@ document.addEventListener('click', async e => {
       toast('探测任务已下发'); openTask(res.task.id);
     }
     else if (action === 'deploy') {
-      const body = { module: $('#dep-module').value, port: Number($('#dep-port').value) || 0, dest: $('#dep-dest').value.trim(), server_name: '' };
+      const body = { module: $('#dep-module').value, port: Number($('#dep-port').value) || 0, dest: $('#dep-dest').value.trim(), server_name: '',
+        public_host: $('#dep-pubhost').value.trim(), public_port: Number($('#dep-pubport').value) || 0 };
       const res = await api(`/api/nodes/${n.id}/deploy`, { method: 'POST', body: JSON.stringify(body) });
       openTask(res.task.id);
+    }
+    else if (action === 'endpoint') {
+      const host = prompt('对外地址（留空 = 用节点 IP；NAT 映射场景填网关地址）', t.dataset.host || '');
+      if (host === null) return;
+      const portStr = prompt('对外端口（留空 = 用监听端口；NAT 映射场景填外部映射端口）', t.dataset.port || '');
+      if (portStr === null) return;
+      const port = portStr.trim() === '' ? 0 : Number(portStr);
+      if (Number.isNaN(port) || port < 0 || port > 65535) { toast('端口不合法'); return; }
+      await api(`/api/nodes/${n.id}/deployments/${t.dataset.id}/endpoint`, { method: 'PUT', body: JSON.stringify({ public_host: host.trim(), public_port: port }) });
+      toast('对外端点已更新'); refresh();
+    }
+    else if (action === 'install-cmd') {
+      const res = await api(`/api/nodes/${n.id}/install-command`);
+      $('#install-cmd-view').textContent = res.install_command;
+      $('#install-cmd-copy2').onclick = async () => { await navigator.clipboard.writeText(res.install_command); toast('安装命令已复制'); };
+      openModal('#modal-install');
     }
     else if (action === 'undeploy') {
       if (!confirm('确定卸载该协议部署？')) return;

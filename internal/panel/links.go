@@ -10,7 +10,17 @@ import (
 )
 
 // ComposeLink builds the client share link for a deployment on a node.
+// The endpoint used is the deployment's public override when set (NAT port
+// mapping), falling back to the node's IP and the listen port.
 func ComposeLink(n *Node, d proto.Deployment) string {
+	host := d.PublicHost
+	if host == "" {
+		host = n.IP
+	}
+	port := d.PublicPort
+	if port <= 0 {
+		port = d.Port
+	}
 	remark := url.QueryEscape(n.Name + "-" + d.Module)
 	switch d.Module {
 	case proto.ModuleVLESSReality:
@@ -25,10 +35,10 @@ func ComposeLink(n *Node, d proto.Deployment) string {
 		if d.ShortID != "" {
 			q.Set("sid", d.ShortID)
 		}
-		return fmt.Sprintf("vless://%s@%s:%d?%s#%s", d.UUID, n.IP, d.Port, q.Encode(), remark)
+		return fmt.Sprintf("vless://%s@%s:%d?%s#%s", d.UUID, host, port, q.Encode(), remark)
 	case proto.ModuleSS2022:
 		userinfo := base64.RawURLEncoding.EncodeToString([]byte(d.Method + ":" + d.Password))
-		return fmt.Sprintf("ss://%s@%s:%d#%s", userinfo, n.IP, d.Port, remark)
+		return fmt.Sprintf("ss://%s@%s:%d#%s", userinfo, host, port, remark)
 	}
 	return ""
 }

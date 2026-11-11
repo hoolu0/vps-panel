@@ -39,12 +39,16 @@
   <div class="modal-card wide">
     <div class="modal-head"><h2>添加 VPS</h2><button class="btn ghost close-modal">✕</button></div>
     <form id="add-form">
+      <div class="row" style="margin-bottom:10px">
+        <label class="check"><input type="radio" name="add_mode" value="ssh" checked> SSH 安装</label>
+        <label class="check"><input type="radio" name="add_mode" value="manual"> 手动安装（无 SSH 通道时用）</label>
+      </div>
       <div class="form-grid">
         <label>名称<input name="name" required placeholder="如 香港-01"></label>
-        <label>IP<input name="ip" required placeholder="1.2.3.4"></label>
-        <label>SSH 端口<input name="ssh_port" type="number" value="22" required></label>
-        <label>用户名<input name="username" value="root"></label>
-        <label>登录方式
+        <label id="fld-ip"><span id="ip-label-text">IP</span><input name="ip" required placeholder="1.2.3.4"></label>
+        <label id="fld-sshport">SSH 端口<input name="ssh_port" type="number" value="22" required></label>
+        <label id="fld-user">用户名<input name="username" value="root"></label>
+        <label id="fld-authtype">登录方式
           <select name="auth_type" id="auth-type">
             <option value="password">密码</option>
             <option value="key">密钥</option>
@@ -63,10 +67,17 @@
             <option value="America/Los_Angeles"></option><option value="Australia/Sydney"></option>
           </datalist>
         </label>
-        <label>新 SSH 端口（初始化时修改，可空）<input name="new_ssh_port" type="number" placeholder="如 2222"></label>
-        <label class="check span2"><input type="checkbox" name="run_init" checked> 接入后自动执行初始化模板（更新/工具/时区/SSH端口/fail2ban/ufw/BBR/swap）</label>
+        <label id="fld-newport">新 SSH 端口（初始化时修改，可空）<input name="new_ssh_port" type="number" placeholder="如 2222"></label>
+        <label id="fld-runinit" class="check span2"><input type="checkbox" name="run_init" checked> 接入后自动执行初始化模板（更新/工具/时区/SSH端口/fail2ban/ufw/BBR/swap）</label>
       </div>
-      <p class="muted small">密码/私钥仅用于本次接入安装 agent，不会保存。</p>
+      <p class="muted small" id="add-ssh-hint">密码/私钥仅用于本次接入安装 agent，不会保存。</p>
+      <p class="muted small hidden" id="add-manual-hint">手动安装不经过 SSH：创建节点后生成一条安装命令，在 VPS 上以 root 执行即可自动上线（适用于只有端口映射、没有 SSH 通道的 NAT 机器）。</p>
+      <div id="manual-result" class="hidden">
+        <label class="block">安装命令（在 VPS 上以 root 执行，执行后节点自动上线）
+          <textarea id="install-cmd" readonly rows="3"></textarea></label>
+        <button type="button" class="btn" id="install-cmd-copy">复制命令</button>
+        <p class="muted small">命令含节点令牌，请勿外传。</p>
+      </div>
       <div class="modal-foot">
         <span id="add-status" class="muted"></span>
         <button type="button" class="btn close-modal">取消</button>
@@ -136,6 +147,16 @@
     <div class="qr-wrap"><img id="qr-img" alt="二维码"></div>
     <pre id="qr-link" class="logs"></pre>
     <button class="btn w100" id="qr-copy">复制链接</button>
+  </div>
+</div>
+
+<!-- install command modal -->
+<div id="modal-install" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-head"><h2>手动安装命令</h2><button class="btn ghost close-modal">✕</button></div>
+    <p class="muted small">在 VPS 上以 root 执行，执行后节点自动上线。命令含节点令牌，请勿外传。</p>
+    <pre id="install-cmd-view" class="logs"></pre>
+    <button class="btn w100" id="install-cmd-copy2">复制命令</button>
   </div>
 </div>
 

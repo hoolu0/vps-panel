@@ -204,6 +204,20 @@ func (h *Hub) onDeployments(nodeID string, raw json.RawMessage) {
 	}
 	_ = h.store.Update(func(d *Data) {
 		if n := FindNode(d, nodeID); n != nil {
+			// The agent does not know the panel-side public endpoint
+			// overrides; carry them over from the stored records.
+			for i := range deps {
+				for _, old := range n.Deployments {
+					if old.ID == deps[i].ID {
+						if deps[i].PublicHost == "" {
+							deps[i].PublicHost = old.PublicHost
+						}
+						if deps[i].PublicPort == 0 {
+							deps[i].PublicPort = old.PublicPort
+						}
+					}
+				}
+			}
 			n.Deployments = deps
 			n.LastSeen = time.Now()
 		}
@@ -266,12 +280,31 @@ func (h *Hub) onTaskResult(nodeID string, taskID string, raw json.RawMessage) {
 	switch finished.Kind {
 	case proto.TaskDeploy:
 		var dep proto.Deployment
-		if res.OK && json.Unmarshal(res.Result, &dep) == nil && dep.ID != "" {
+		depOK := json.Unmarshal(res.Result, &dep) == nil && dep.ID != ""
+		if depOK {
 			_ = h.store.Update(func(d *Data) {
+				// Apply (and consume) any public-endpoint override the
+				// deploy request carried, then merge into the node.
+				if ov, ok := d.PendingEndpoints[dep.ID]; ok {
+					dep.PublicHost = ov.PublicHost
+					dep.PublicPort = ov.PublicPort
+					delete(d.PendingEndpoints, dep.ID)
+				}
+				if !res.OK {
+					return
+				}
 				if n := FindNode(d, nodeID); n != nil {
 					found := false
 					for i, x := range n.Deployments {
 						if x.ID == dep.ID {
+							// keep a stored override when the incoming
+							// record carries none
+							if dep.PublicHost == "" {
+								dep.PublicHost = x.PublicHost
+							}
+							if dep.PublicPort == 0 {
+								dep.PublicPort = x.PublicPort
+							}
 							n.Deployments[i] = dep
 							found = true
 						}
@@ -281,6 +314,12 @@ func (h *Hub) onTaskResult(nodeID string, taskID string, raw json.RawMessage) {
 					}
 				}
 			})
+		} else {
+			// Unparsable result: still consume the pending override.
+			var p proto.DeployParams
+			if json.Unmarshal(finished.Params, &p) == nil && p.DeploymentID != "" {
+				_ = h.store.Update(func(d *Data) { delete(d.PendingEndpoints, p.DeploymentID) })
+			}
 		}
 	case proto.TaskInit:
 		if res.OK {

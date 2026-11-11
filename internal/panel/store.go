@@ -63,6 +63,14 @@ type APIToken struct {
 	LastUsedAt time.Time `json:"last_used_at,omitempty"`
 }
 
+// EndpointOverride is a panel-side public endpoint override for one
+// deployment (NAT deployments where the external host/port differs from
+// the address the agent listens on).
+type EndpointOverride struct {
+	PublicHost string `json:"public_host,omitempty"`
+	PublicPort int    `json:"public_port,omitempty"`
+}
+
 // Data is the whole persisted panel state.
 type Data struct {
 	AdminPasswordHash string              `json:"admin_password_hash"`
@@ -73,6 +81,10 @@ type Data struct {
 	Nodes             []*Node             `json:"nodes"`
 	Tasks             []*TaskRec          `json:"tasks"`
 	APITokens         []*APIToken         `json:"api_tokens"`
+	// PendingEndpoints holds public-endpoint overrides for deploy tasks
+	// that have been dispatched but whose result (carrying the real
+	// deployment record) has not landed yet, keyed by deployment id.
+	PendingEndpoints map[string]EndpointOverride `json:"pending_endpoints,omitempty"`
 }
 
 // Store persists Data as one JSON file (atomic replace on save).

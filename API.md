@@ -48,6 +48,51 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
   https://panel.example.com/api/v1/nodes/node-xxxx/deploy
 ```
 
+### 部署对外端点覆盖（NAT 场景）
+
+NAT 机器的外部映射端点与 agent 监听端点不一致时，部署可带
+`public_host` / `public_port`（可选）：agent 仍监听 `port`，但面板拼
+分享链接（及二维码）时改用对外端点。部署后也可单独修改：
+
+```bash
+# 部署时指定对外端点
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -d '{"module":"ss2022","port":8388,"public_host":"203.0.113.9","public_port":18443}' \
+  https://panel.example.com/api/v1/nodes/node-xxxx/deploy
+
+# 修改已有部署的对外端点（Web 接口；空字符串 + 0 表示清除覆盖）
+curl -X PUT -H "Authorization: Bearer $TOKEN" \
+  -d '{"public_host":"203.0.113.9","public_port":18443}' \
+  https://panel.example.com/api/nodes/node-xxxx/deployments/dep-xxxx/endpoint
+```
+
+`PUT .../endpoint` 返回 `{"deployment": {...}}`，含用新端点重拼的 `link`。
+
+## 手动安装接入（无 SSH 通道的机器）
+
+没有 SSH 映射的机器（如 NAT 小鸡）可走手动安装：先在面板创建节点拿到
+安装命令，再在 VPS 上以 root 执行，agent 自动上线。
+
+```bash
+# 1) 创建手动节点（面板 Web 接口，需登录会话或 Token）
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"nat-01","ip":"203.0.113.9","timezone":"Asia/Shanghai"}' \
+  https://panel.example.com/api/nodes/manual
+# → {"node": {...}, "install_command": "curl -fsSL https://panel.example.com/install-agent.sh | bash -s -- --panel https://panel.example.com --token <节点令牌>"}
+
+# 2) 随时重新获取安装命令
+curl -H "Authorization: Bearer $TOKEN" https://panel.example.com/api/nodes/node-xxxx/install-command
+```
+
+`install_command` 含节点令牌，只在上述已鉴权接口返回，不要外传、不要写日志。
+
+两个公开（免登录）分发路径，供安装命令在目标机上拉取：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/install-agent.sh` | agent 安装脚本（bash，不含任何令牌；参数 `--panel` / `--token`，或环境变量 `PANEL_URL` / `AGENT_TOKEN`） |
+| GET | `/dl/agent/{arch}` | 内嵌 agent 二进制，arch 只接受 `amd64` / `arm64`，其余 404 |
+
 查任务结果（部署成功后 result 中含连接参数，节点详情里含完整分享链接）：
 
 ```bash

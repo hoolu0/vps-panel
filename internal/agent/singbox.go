@@ -24,6 +24,10 @@ import (
 
 const singBoxBin = "/usr/local/bin/sing-box"
 
+// fallbackSingBoxVersion is used to build a direct download URL when the
+// GitHub "latest release" API lookup fails (rate limits etc.).
+const fallbackSingBoxVersion = "1.14.4"
+
 // StoredDeployment is a deployment as persisted by the agent. It carries
 // the Reality private key, which never leaves the agent.
 type StoredDeployment struct {
@@ -152,7 +156,11 @@ func (s *SingBox) ensureInstalled(r *Runner) error {
 	r.Step("安装 sing-box")
 	version, url, err := latestReleaseAsset()
 	if err != nil {
-		return fmt.Errorf("查询 sing-box 最新版本失败： %w", err)
+		// GitHub API 未鉴权查询容易被限流（共享出口 IP 尤甚）：查询失败不
+		// 直接报错，改用已验证的固定版本直链下载（不走 API）。
+		r.logf("查询 sing-box 最新版本失败（%v），改用固定版本 %s", err, fallbackSingBoxVersion)
+		version = "v" + fallbackSingBoxVersion
+		url = fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/v%[1]s/sing-box-%[1]s-linux-%[2]s.tar.gz", fallbackSingBoxVersion, runtime.GOARCH)
 	}
 	r.logf("下载 sing-box %s (%s)", version, runtime.GOARCH)
 	tmp, err := os.MkdirTemp("", "singbox-*")

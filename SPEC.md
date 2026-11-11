@@ -28,6 +28,7 @@
 3. 密码 / 私钥仅用于本次接入，**不落库**；之后所有管理走 agent 通道
 4. Agent 上线后，面板下发「初始化模板」作为第一个任务，执行日志实时回传面板，失败可一键重跑
 5. **手动安装（补充路径）**：没有 SSH 通道/映射的机器（如 NAT 小鸡）可在面板选「手动安装」创建节点，面板生成一条安装命令，在 VPS 上以 root 执行即可装好 agent 并自动上线；脚本与 agent 二进制由面板公开分发（`/install-agent.sh`、`/dl/agent/{arch}`），令牌只出现在命令参数里
+6. **init 系统适配**：接入与手动安装自动检测目标机的 init 系统——systemd 写 unit、OpenRC（如 Alpine）写 `/etc/init.d` 脚本并用 `rc-update`/`rc-service` 管理、两者都没有时用 nohup 拉起（日志注明重启不自动恢复）；agent 管理 sing-box、重启 sshd、设置 agent 自启同样按 init 分发。初始化模板在 Alpine 上跳过发行版专属步骤（包管理、ufw、fail2ban、时间同步服务）并逐项在日志注明（后续 apk 化），时区在有 tzdata 时用软链方式设置
 
 ## 初始化模板（定版）
 

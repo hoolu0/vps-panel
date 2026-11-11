@@ -127,6 +127,9 @@ func setSSHSocketPorts(r *Runner, ports []int) error {
 }
 
 func restartSSH(r *Runner) error {
+	if currentInit() == initOpenRC {
+		return r.Run("rc-service", "sshd", "restart")
+	}
 	if sshSocketActivated(r) {
 		_ = r.Run("systemctl", "restart", "ssh.socket")
 	}
@@ -158,16 +161,22 @@ func writeFile(path, content string, perm os.FileMode) error {
 // verification third; the old port is only closed later by RunFinalizeSSH
 // after the panel confirms the new port is reachable.
 func RunInit(p proto.InitParams, r *Runner) (map[string]any, error) {
+	alpine := isAlpine()
 	result := map[string]any{}
 	pm := pkgManager(r)
-	if pm == "" {
+	if pm == "" && !alpine {
 		r.Warn("未识别的包管理器（仅支持 apt/dnf/yum），跳过软件包相关步骤")
+	}
+	if alpine {
+		r.Step("检测到 Alpine Linux：发行版专属步骤将逐项跳过并注明")
 	}
 	oldPorts := sshConfigPorts()
 	result["old_ssh_port"] = oldPorts[0]
 
 	// 1. packages
-	if pm == "apt" {
+	if alpine {
+		r.logf("Alpine 跳过：软件包更新与常用工具安装（apt/dnf/yum）（后续 apk 化）")
+	} else if pm == "apt" {
 		r.Step("更新软件包并安装常用工具")
 		if err := r.RunEnv([]string{"DEBIAN_FRONTEND=noninteractive"}, "apt-get", "update"); err != nil {
 			r.Warn("apt-get update 失败：%v", err)
@@ -196,7 +205,18 @@ func RunInit(p proto.InitParams, r *Runner) (map[string]any, error) {
 	}
 
 	// 2. timezone + time sync
-	if p.Timezone != "" {
+	if p.Timezone != "" && alpine {
+		r.Step("设置时区为 %s", p.Timezone)
+		zonePath := "/usr/share/zoneinfo/" + p.Timezone
+		if _, err := os.Stat(zonePath); err == nil {
+			_ = r.Run("ln", "-sf", zonePath, "/etc/localtime")
+			if !r.DryRun {
+				_ = writeFile("/etc/timezone", p.Timezone+"\n", 0o644)
+			}
+		} else {
+			r.logf("Alpine 跳过：时区设置（/usr/share/zoneinfo 不存在，缺 tzdata）（后续 apk 化）")
+		}
+	} else if p.Timezone != "" {
 		r.Step("设置时区为 %s", p.Timezone)
 		if err := r.Run("timedatectl", "set-timezone", p.Timezone); err != nil {
 			if err2 := writeFile("/etc/timezone", p.Timezone+"\n", 0o644); err2 == nil {
@@ -206,12 +226,15 @@ func RunInit(p proto.InitParams, r *Runner) (map[string]any, error) {
 			}
 		}
 	}
-	r.Step("启用时间同步")
-	if pm == "dnf" || pm == "yum" {
+	if alpine {
+		r.logf("Alpine 跳过：时间同步服务启用（systemd-timesyncd/chronyd）（后续 apk 化）")
+	} else if pm == "dnf" || pm == "yum" {
+		r.Step("启用时间同步")
 		if err := r.Run("systemctl", "enable", "--now", "chronyd"); err != nil {
 			r.Warn("启用 chronyd 失败：%v", err)
 		}
 	} else {
+		r.Step("启用时间同步")
 		if err := r.Run("systemctl", "enable", "--now", "systemd-timesyncd"); err != nil {
 			r.Warn("启用 systemd-timesyncd 失败：%v", err)
 		}
@@ -223,7 +246,9 @@ func RunInit(p proto.InitParams, r *Runner) (map[string]any, error) {
 		wantPorts = append(wantPorts, p.NewSSHPort)
 	}
 	r.Step("配置 ufw 防火墙（先放行 SSH 端口 %v）", wantPorts)
-	if _, err := r.Capture("which", "ufw"); err == nil || r.DryRun {
+	if alpine {
+		r.logf("Alpine 跳过：ufw 防火墙配置（Alpine 无 ufw；请在服务商面板确认 SSH 端口 %v 已放行/映射）（后续 apk 化）", wantPorts)
+	} else if _, err := r.Capture("which", "ufw"); err == nil || r.DryRun {
 		_ = r.Run("ufw", "default", "deny", "incoming")
 		_ = r.Run("ufw", "default", "allow", "outgoing")
 		for _, port := range wantPorts {
@@ -238,18 +263,22 @@ func RunInit(p proto.InitParams, r *Runner) (map[string]any, error) {
 
 	// 4. fail2ban for sshd
 	r.Step("配置 fail2ban 防护 SSH")
-	portList := make([]string, len(wantPorts))
-	for i, p := range wantPorts {
-		portList[i] = strconv.Itoa(p)
-	}
-	jail := "[sshd]\nenabled = true\nport = " + strings.Join(portList, ",") + "\nmaxretry = 5\nfindtime = 10m\nbantime = 1h\n"
-	if err := writeFile("/etc/fail2ban/jail.d/vps-panel-sshd.conf", jail, 0o644); err != nil && !r.DryRun {
-		r.Warn("写入 fail2ban 配置失败：%v", err)
-	}
-	if err := r.Run("systemctl", "enable", "--now", "fail2ban"); err != nil {
-		r.Warn("启用 fail2ban 失败：%v", err)
+	if alpine {
+		r.logf("Alpine 跳过：fail2ban 安装与配置（后续 apk 化）")
 	} else {
-		_ = r.Run("systemctl", "restart", "fail2ban")
+		portList := make([]string, len(wantPorts))
+		for i, p := range wantPorts {
+			portList[i] = strconv.Itoa(p)
+		}
+		jail := "[sshd]\nenabled = true\nport = " + strings.Join(portList, ",") + "\nmaxretry = 5\nfindtime = 10m\nbantime = 1h\n"
+		if err := writeFile("/etc/fail2ban/jail.d/vps-panel-sshd.conf", jail, 0o644); err != nil && !r.DryRun {
+			r.Warn("写入 fail2ban 配置失败：%v", err)
+		}
+		if err := r.Run("systemctl", "enable", "--now", "fail2ban"); err != nil {
+			r.Warn("启用 fail2ban 失败：%v", err)
+		} else {
+			_ = r.Run("systemctl", "restart", "fail2ban")
+		}
 	}
 
 	// 5. SSH port change: transition with both ports listening
@@ -266,7 +295,7 @@ func RunInit(p proto.InitParams, r *Runner) (map[string]any, error) {
 		if _, err := r.Capture("which", "semanage"); err == nil {
 			_ = r.Run("semanage", "port", "-a", "-t", "ssh_port_t", "-p", "tcp", strconv.Itoa(p.NewSSHPort))
 		}
-		if sshSocketActivated(r) {
+		if currentInit() == initSystemd && sshSocketActivated(r) {
 			r.logf("检测到 ssh.socket 套接字激活，同步写入 socket 端口")
 			if err := setSSHSocketPorts(r, wantPorts); err != nil && !r.DryRun {
 				r.Warn("写入 ssh.socket 端口失败：%v", err)
@@ -337,8 +366,17 @@ func RunInit(p proto.InitParams, r *Runner) (map[string]any, error) {
 
 	// 8. agent autostart
 	r.Step("确认 agent 开机自启")
-	if err := r.Run("systemctl", "enable", "vps-agent"); err != nil {
-		r.Warn("启用 vps-agent 自启失败：%v", err)
+	switch currentInit() {
+	case initOpenRC:
+		if err := r.Run("rc-update", "add", "vps-agent", "default"); err != nil {
+			r.Warn("启用 vps-agent 自启失败（OpenRC）：%v", err)
+		}
+	case initNone:
+		r.Warn("无 systemd/OpenRC，无法设置 vps-agent 开机自启")
+	default:
+		if err := r.Run("systemctl", "enable", "vps-agent"); err != nil {
+			r.Warn("启用 vps-agent 自启失败：%v", err)
+		}
 	}
 
 	r.logf("初始化模板执行完成")
@@ -356,7 +394,7 @@ func RunFinalizeSSH(p proto.FinalizeParams, r *Runner) error {
 	} else {
 		r.logf("[dry-run] sshd 将仅监听端口 %d", p.NewSSHPort)
 	}
-	if sshSocketActivated(r) {
+	if currentInit() == initSystemd && sshSocketActivated(r) {
 		if err := setSSHSocketPorts(r, []int{p.NewSSHPort}); err != nil && !r.DryRun {
 			r.Warn("写入 ssh.socket 端口失败：%v", err)
 		}
@@ -370,7 +408,11 @@ func RunFinalizeSSH(p proto.FinalizeParams, r *Runner) error {
 	if err := writeFile("/etc/fail2ban/jail.d/vps-panel-sshd.conf", jail, 0o644); err != nil && !r.DryRun {
 		r.Warn("更新 fail2ban 配置失败：%v", err)
 	}
-	_ = r.Run("systemctl", "restart", "fail2ban")
+	if currentInit() == initOpenRC {
+		_ = r.Run("rc-service", "fail2ban", "restart")
+	} else {
+		_ = r.Run("systemctl", "restart", "fail2ban")
+	}
 	r.logf("旧 SSH 端口 %d 已关闭", p.OldSSHPort)
 	return nil
 }

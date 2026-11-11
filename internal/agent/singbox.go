@@ -190,7 +190,21 @@ func (s *SingBox) ensureInstalled(r *Runner) error {
 	return s.ensureService(r)
 }
 
+// ensureService registers the sing-box service with the host init system
+// (systemd unit or OpenRC script) and enables it for autostart.
 func (s *SingBox) ensureService(r *Runner) error {
+	switch currentInit() {
+	case initOpenRC:
+		return s.ensureServiceOpenRC(r)
+	case initNone:
+		r.logf("未检测到 systemd/OpenRC，sing-box 以 nohup 方式运行（重启不自动恢复）")
+		return nil
+	default:
+		return s.ensureServiceSystemd(r)
+	}
+}
+
+func (s *SingBox) ensureServiceSystemd(r *Runner) error {
 	unit := `[Unit]
 Description=sing-box service
 After=network.target nss-lookup.target
@@ -216,6 +230,62 @@ WantedBy=multi-user.target
 	}
 	_ = r.Run("systemctl", "enable", "sing-box")
 	return nil
+}
+
+func (s *SingBox) ensureServiceOpenRC(r *Runner) error {
+	script := `#!/sbin/openrc-run
+name="sing-box"
+description="sing-box service"
+command="` + singBoxBin + `"
+command_args="run -c ` + s.configPath() + `"
+command_background=true
+pidfile="/run/sing-box.pid"
+output_log="/var/log/sing-box.log"
+error_log="/var/log/sing-box.log"
+
+depend() {
+	need net
+}
+`
+	scriptPath := "/etc/init.d/sing-box"
+	cur, _ := os.ReadFile(scriptPath)
+	if string(cur) != script {
+		if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+			return err
+		}
+	}
+	_ = r.Run("rc-update", "add", "sing-box", "default")
+	return nil
+}
+
+// svcStart starts the sing-box service via the host init system.
+func (s *SingBox) svcStart(r *Runner) error {
+	switch currentInit() {
+	case initOpenRC:
+		return r.Run("rc-service", "sing-box", "start")
+	case initNone:
+		return r.RunShell("nohup " + singBoxBin + " run -c " + s.configPath() + " >/var/log/sing-box.log 2>&1 &")
+	default:
+		return r.Run("systemctl", "start", "sing-box")
+	}
+}
+
+// svcRestart restarts the sing-box service via the host init system. On
+// OpenRC a restart of a stopped service may fail, so fall back to start.
+func (s *SingBox) svcRestart(r *Runner) error {
+	switch currentInit() {
+	case initOpenRC:
+		if err := r.Run("rc-service", "sing-box", "restart"); err != nil {
+			r.logf("rc-service sing-box restart 失败（%v），改用 start", err)
+			return s.svcStart(r)
+		}
+		return nil
+	case initNone:
+		_ = r.Run("pkill", "-x", "sing-box")
+		return s.svcStart(r)
+	default:
+		return r.Run("systemctl", "restart", "sing-box")
+	}
 }
 
 type ghRelease struct {
@@ -391,7 +461,7 @@ func (s *SingBox) applyConfig(r *Runner) error {
 	if err := os.Rename(tmpPath, s.configPath()); err != nil {
 		return err
 	}
-	if err := r.Run("systemctl", "restart", "sing-box"); err != nil {
+	if err := s.svcRestart(r); err != nil {
 		return fmt.Errorf("重启 sing-box 失败： %w", err)
 	}
 	r.logf("sing-box 已重启，当前 %d 个入站", len(s.deps))
@@ -438,7 +508,7 @@ func (s *SingBox) Deploy(p proto.DeployParams, r *Runner) (proto.Deployment, err
 			return proto.Deployment{}, err
 		}
 		if err := s.ensureService(r); err != nil {
-			r.Warn("写入 sing-box systemd 服务失败：%v", err)
+			r.Warn("注册 sing-box 服务失败：%v", err)
 		}
 	}
 
@@ -528,8 +598,15 @@ func (s *SingBox) Undeploy(id string, r *Runner) error {
 // RestartService restarts sing-box.
 func (s *SingBox) RestartService(r *Runner) error {
 	if r.DryRun {
-		r.logf("[dry-run] systemctl restart sing-box")
+		switch currentInit() {
+		case initOpenRC:
+			r.logf("[dry-run] rc-service sing-box restart")
+		case initNone:
+			r.logf("[dry-run] nohup 启动 sing-box（无 init 系统）")
+		default:
+			r.logf("[dry-run] systemctl restart sing-box")
+		}
 		return nil
 	}
-	return r.Run("systemctl", "restart", "sing-box")
+	return s.svcRestart(r)
 }

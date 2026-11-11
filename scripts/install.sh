@@ -19,7 +19,7 @@ if [ ! -f "$BIN" ]; then
   if command -v go >/dev/null 2>&1; then
     ./scripts/build.sh
   elif ! ./scripts/fetch-release.sh; then
-    echo "缺少 $BIN：本机没有 Go 工具链，且无法从 GitHub Release 下载（需要 gh 登录或 GITHUB_TOKEN）；请先在有 Go 的机器上运行 scripts/build.sh 后同步 dist/ 过来"
+    echo "缺少 $BIN：本机没有 Go 工具链，且从 GitHub Release 下载失败；请检查本机到 github.com 的网络"
     exit 1
   fi
 fi

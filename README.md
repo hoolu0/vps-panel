@@ -49,13 +49,13 @@
 ```bash
 git clone https://github.com/hoolu0/vps-panel.git
 cd vps-panel
-./scripts/build.sh        # 本机有 Go 时；或把 dist/ 同步过来
+# 没有 git 也可以：curl -L https://github.com/hoolu0/vps-panel/archive/refs/heads/main.tar.gz | tar xz
 sudo ./scripts/install.sh # 代码 /opt/vps-panel，数据 /var/lib/vps-panel
 ```
 
-本机没有 Go 时，`install.sh` 会改从 GitHub Release 下载预编译好的面板二进制
-（仓库是私有的，需要 `gh` 登录或 `GITHUB_TOKEN`）。Release 由打 tag 自动生成，
-见 `.github/workflows/release.yml`，例如 `git tag v0.1.0 && git push --tags`。
+本机没有 Go 时，`install.sh` 会自动从 GitHub Release 免登录下载预编译好的
+面板二进制（仓库是公开的，只需要 curl 能通 github.com）。Release 由打 tag
+自动生成，见 `.github/workflows/release.yml`，例如 `git tag v0.1.0 && git push --tags`。
 
 首次启动的管理员密码在日志里：`journalctl -u vps-panel | grep 管理员密码`，
 也可以安装前设置环境变量 `PANEL_ADMIN_PASSWORD` 预设（仅首次生效）。

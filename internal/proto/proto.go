@@ -116,7 +116,7 @@ type DeployParams struct {
 }
 
 // Version of the panel/agent build.
-const Version = "0.2.1"
+const Version = "0.2.2"
 
 // FinalizeParams are the parameters of the finalize_ssh task, sent by the
 // panel after it has verified the new SSH port is reachable.

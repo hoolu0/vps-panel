@@ -150,9 +150,22 @@ func (s *SingBox) pickPort() int {
 // --- installation -----------------------------------------------------------
 
 func (s *SingBox) ensureInstalled(r *Runner) error {
-	if _, err := os.Stat(singBoxBin); err == nil {
-		return nil
+	if _, err := os.Stat(singBoxBin); err != nil {
+		if err := s.downloadBinary(r); err != nil {
+			return err
+		}
 	}
+	// A binary that exists (or was just written) may still not execute
+	// here — see ensureRunnable. Check before anything tries to use it.
+	if err := s.ensureRunnable(r); err != nil {
+		return err
+	}
+	return s.ensureService(r)
+}
+
+// downloadBinary fetches the sing-box release binary and writes it to
+// singBoxBin.
+func (s *SingBox) downloadBinary(r *Runner) error {
 	r.Step("安装 sing-box")
 	version, url, err := latestReleaseAsset()
 	if err != nil {
@@ -187,7 +200,48 @@ func (s *SingBox) ensureInstalled(r *Runner) error {
 		return err
 	}
 	r.logf("sing-box %s 已安装到 %s", version, singBoxBin)
-	return s.ensureService(r)
+	return nil
+}
+
+// ensureRunnable verifies the sing-box binary can actually execute on
+// this host. The official release binaries are dynamically linked
+// against glibc; on musl-based Alpine the loader
+// (/lib64/ld-linux-x86-64.so.2) is missing and exec fails with a
+// misleading "no such file or directory". On Alpine, install gcompat
+// (the glibc compatibility layer) and check again; anywhere else, fail
+// here with a clear error instead of letting the confusing exec error
+// surface later during config validation.
+func (s *SingBox) ensureRunnable(r *Runner) error {
+	check := func() (string, error) {
+		return r.CaptureCombined(singBoxBin, "version")
+	}
+	install := func() error {
+		return r.Run("apk", "add", "--no-cache", "gcompat")
+	}
+	return ensureRunnableWith(r, check, isAlpine(), install)
+}
+
+// ensureRunnableWith is the decision core of ensureRunnable, split out
+// for unit tests: check runs the binary, install fetches the compat
+// layer, alpine says whether the compat route applies.
+func ensureRunnableWith(r *Runner, check func() (string, error), alpine bool, install func() error) error {
+	out, err := check()
+	if err == nil {
+		return nil
+	}
+	if !alpine {
+		return fmt.Errorf("sing-box 二进制无法执行：%v %s", err, out)
+	}
+	r.logf("sing-box 无法运行（glibc/musl 兼容问题），正在安装 gcompat…")
+	if ierr := install(); ierr != nil {
+		return fmt.Errorf("sing-box 无法运行，安装 gcompat 失败：%v", ierr)
+	}
+	out, err = check()
+	if err != nil {
+		return fmt.Errorf("sing-box 在本机仍无法运行（已安装 gcompat）：%v %s", err, out)
+	}
+	r.logf("已通过 gcompat 修复，sing-box 自检通过")
+	return nil
 }
 
 // ensureService registers the sing-box service with the host init system

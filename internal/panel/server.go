@@ -524,9 +524,10 @@ func (s *Server) dispatchOrErr(w http.ResponseWriter, nodeID, kind string, param
 func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
-		Timezone   string `json:"timezone"`
-		NewSSHPort int    `json:"new_ssh_port"`
-		DryRun     bool   `json:"dry_run"`
+		Timezone   string   `json:"timezone"`
+		NewSSHPort int      `json:"new_ssh_port"`
+		DryRun     bool     `json:"dry_run"`
+		Steps      []string `json:"steps"`
 	}
 	_ = readJSON(r, &body)
 	s.store.View(func(d *Data) {
@@ -539,7 +540,7 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	})
-	s.dispatchOrErr(w, id, proto.TaskInit, proto.InitParams{Timezone: body.Timezone, NewSSHPort: body.NewSSHPort, DryRun: body.DryRun})
+	s.dispatchOrErr(w, id, proto.TaskInit, proto.InitParams{Timezone: body.Timezone, NewSSHPort: body.NewSSHPort, DryRun: body.DryRun, Steps: body.Steps})
 }
 
 func (s *Server) handleFinalizeSSH(w http.ResponseWriter, r *http.Request) {

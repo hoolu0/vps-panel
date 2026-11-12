@@ -40,6 +40,52 @@ function msCell(r) {
 }
 const KIND_CN = { init: '初始化模板', finalize_ssh: 'SSH端口收尾', probe_now: '立即探测', deploy: '部署协议', undeploy: '卸载协议', restart_proto: '重启协议服务', sync: '同步' };
 const MODULE_CN = { 'vless-reality': 'VLESS + Reality', 'ss2022': 'Shadowsocks 2022' };
+const INIT_STEPS = [
+  ['update', '系统更新'], ['tools', '常用工具'], ['timezone', '时区'], ['timesync', '时间同步'],
+  ['ufw', 'ufw 防火墙'], ['fail2ban', 'fail2ban'], ['ssh_port', '修改 SSH 端口'], ['bbr', 'BBR'],
+  ['swap', '小内存自动 swap'], ['agent_autostart', 'agent 开机自启'],
+];
+
+// ---------- timezone picker (preset select + custom IANA input) ----------
+const TZ_PRESETS = [
+  ['Asia/Shanghai', '上海'], ['Asia/Hong_Kong', '香港'], ['Asia/Tokyo', '东京'],
+  ['Asia/Singapore', '新加坡'], ['Europe/Berlin', '法兰克福'], ['Europe/London', '伦敦'],
+  ['America/New_York', '纽约'], ['America/Los_Angeles', '洛杉矶'], ['Australia/Sydney', '悉尼'],
+  ['UTC', 'UTC'],
+];
+// Renders the picker controls into the container element with the given id.
+function tzPickerFill(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.innerHTML = `<select class="tz-sel">${TZ_PRESETS.map(([v, cn]) => `<option value="${v}">${cn}（${v}）</option>`).join('')}<option value="__custom__">自定义…</option></select>` +
+    '<input class="tz-custom hidden" placeholder="IANA 时区名，如 Asia/Chongqing">';
+  $('.tz-sel', el).addEventListener('change', () => tzPickerSync(id));
+}
+function tzPickerSync(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  $('.tz-custom', el).classList.toggle('hidden', $('.tz-sel', el).value !== '__custom__');
+}
+// Preselects a timezone: a preset value selects it; anything else switches
+// to custom mode with the value filled in.
+function tzPickerSet(id, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const v = value || 'Asia/Shanghai';
+  if (TZ_PRESETS.some(([p]) => p === v)) {
+    $('.tz-sel', el).value = v;
+  } else {
+    $('.tz-sel', el).value = '__custom__';
+    $('.tz-custom', el).value = v;
+  }
+  tzPickerSync(id);
+}
+function tzPickerValue(id) {
+  const el = document.getElementById(id);
+  if (!el) return '';
+  if ($('.tz-sel', el).value === '__custom__') return $('.tz-custom', el).value.trim();
+  return $('.tz-sel', el).value;
+}
 
 // ---------- state ----------
 let nodes = [];
@@ -156,13 +202,16 @@ function renderDetail() {
   </div>
 
   <div class="panel-box"><h3>初始化模板</h3>
+    <div class="steps-grid">
+      ${INIT_STEPS.map(([sid, cn]) => `<label class="check"><input type="checkbox" class="init-step" value="${sid}" checked> ${cn}</label>`).join('')}
+    </div>
     <div class="row" style="flex-wrap:wrap">
-      <input id="d-tz" list="tz-list" value="${esc(n.timezone || 'Asia/Shanghai')}" style="max-width:220px">
+      <span class="tz-picker" id="d-tz" style="flex:1 1 300px;max-width:460px"></span>
       <input id="d-newport" type="number" placeholder="新 SSH 端口（可空）" value="${n.new_ssh_port || ''}" style="max-width:190px">
       <button class="btn primary" data-action="init" ${n.online ? '' : 'disabled'}>执行初始化</button>
       ${n.new_ssh_port && n.new_ssh_port !== n.ssh_port ? '<button class="btn" data-action="finalize">收尾：关闭旧 SSH 端口</button>' : ''}
     </div>
-    <p class="muted small">含：系统更新、常用工具、时区、SSH 端口修改（先放行新端口再切换）、fail2ban、ufw、BBR、小内存自动 swap。</p>
+    <p class="muted small">勾选要执行的项目，未勾选的会跳过。修改 SSH 端口时先放行新端口再切换，面板验证可达后才关闭旧端口。</p>
   </div>
 
   <div class="panel-box"><h3>协议部署（sing-box）</h3>
@@ -188,7 +237,17 @@ function renderDetail() {
       <input id="dep-port" type="number" placeholder="端口（空=随机）" style="max-width:170px">
       <input id="dep-pubhost" placeholder="对外地址（NAT 可选，空=节点IP）" style="max-width:230px">
       <input id="dep-pubport" type="number" placeholder="对外端口（可选）" style="max-width:150px">
-      <input id="dep-dest" placeholder="Reality 目标（默认 www.microsoft.com:443）" style="max-width:320px">
+      <span id="dep-reality" class="row" style="flex:1 1 400px;flex-wrap:wrap">
+        <input id="dep-dest" list="dest-list" placeholder="Reality 目标站点（默认 www.microsoft.com:443）" style="max-width:300px">
+        <datalist id="dest-list">
+          <option value="www.microsoft.com"></option>
+          <option value="www.apple.com"></option>
+          <option value="www.amazon.com"></option>
+          <option value="www.cloudflare.com"></option>
+          <option value="www.google.com"></option>
+        </datalist>
+        <input id="dep-sni" placeholder="SNI（留空 = 跟随目标站点）" style="max-width:230px">
+      </span>
       <button class="btn primary" data-action="deploy" ${n.online ? '' : 'disabled'}>部署</button>
       <button class="btn" data-action="restart-proto" ${n.online ? '' : 'disabled'}>重启协议服务</button>
     </div>
@@ -209,6 +268,8 @@ function renderDetail() {
   </div>
 
   <div class="panel-box"><h3>任务记录</h3><div id="task-list"><p class="muted">加载中…</p></div></div>`;
+  tzPickerFill('d-tz');
+  tzPickerSet('d-tz', n.timezone || 'Asia/Shanghai');
   loadTasks(n.id);
   loadRouteSources();
 }
@@ -271,7 +332,7 @@ $('#auth-type').addEventListener('change', e => {
   $('#fld-key').classList.toggle('hidden', !key);
   $('#fld-keypass').classList.toggle('hidden', !key);
 });
-$('#btn-add').addEventListener('click', () => { $('#add-logs').classList.add('hidden'); $('#manual-result').classList.add('hidden'); $('#add-status').textContent = ''; applyAddMode(); openModal('#modal-add'); });
+$('#btn-add').addEventListener('click', () => { $('#add-logs').classList.add('hidden'); $('#manual-result').classList.add('hidden'); $('#add-status').textContent = ''; tzPickerSet('add-tz', 'Asia/Shanghai'); applyAddMode(); openModal('#modal-add'); });
 
 // add-node mode: SSH install vs manual install
 const SSH_ONLY_FIELDS = ['#fld-sshport', '#fld-user', '#fld-authtype', '#fld-password', '#fld-key', '#fld-keypass', '#fld-newport', '#fld-runinit'];
@@ -306,7 +367,7 @@ $('#add-form').addEventListener('submit', async e => {
     $('#add-status').textContent = '正在创建节点…';
     try {
       const data = await api('/api/nodes/manual', { method: 'POST', body: JSON.stringify({
-        name: fd.get('name'), ip: (fd.get('ip') || '').trim(), timezone: fd.get('timezone') || '',
+        name: fd.get('name'), ip: (fd.get('ip') || '').trim(), timezone: tzPickerValue('add-tz'),
       }) });
       $('#install-cmd').value = data.install_command;
       $('#manual-result').classList.remove('hidden');
@@ -323,7 +384,7 @@ $('#add-form').addEventListener('submit', async e => {
     username: fd.get('username') || 'root', auth_type: fd.get('auth_type'),
     password: fd.get('password') || '', private_key: fd.get('private_key') || '',
     key_passphrase: fd.get('key_passphrase') || '',
-    timezone: fd.get('timezone') || '', new_ssh_port: Number(fd.get('new_ssh_port')) || 0,
+    timezone: tzPickerValue('add-tz'), new_ssh_port: Number(fd.get('new_ssh_port')) || 0,
     run_init: fd.get('run_init') === 'on',
   };
   $('#add-submit').disabled = true;
@@ -444,7 +505,14 @@ document.addEventListener('click', async e => {
       currentNodeId = null; toast('已删除'); refresh();
     }
     else if (action === 'init') {
-      const res = await api(`/api/nodes/${n.id}/init`, { method: 'POST', body: JSON.stringify({ timezone: $('#d-tz').value, new_ssh_port: Number($('#d-newport').value) || 0 }) });
+      const steps = $$('.init-step').filter(c => c.checked).map(c => c.value);
+      if (!steps.length) { toast('请至少勾选一个初始化项目'); return; }
+      let newPort = 0;
+      if (steps.includes('ssh_port')) {
+        newPort = Number($('#d-newport').value) || 0;
+        if (!newPort) { toast('已勾选「修改 SSH 端口」：请填写新端口，或取消勾选该项'); return; }
+      }
+      const res = await api(`/api/nodes/${n.id}/init`, { method: 'POST', body: JSON.stringify({ timezone: tzPickerValue('d-tz'), new_ssh_port: newPort, steps }) });
       openTask(res.task.id);
     }
     else if (action === 'finalize') {
@@ -456,8 +524,13 @@ document.addEventListener('click', async e => {
       toast('探测任务已下发'); openTask(res.task.id);
     }
     else if (action === 'deploy') {
-      const body = { module: $('#dep-module').value, port: Number($('#dep-port').value) || 0, dest: $('#dep-dest').value.trim(), server_name: '',
+      const module = $('#dep-module').value;
+      const body = { module, port: Number($('#dep-port').value) || 0,
         public_host: $('#dep-pubhost').value.trim(), public_port: Number($('#dep-pubport').value) || 0 };
+      if (module === 'vless-reality') {
+        body.dest = $('#dep-dest').value.trim();
+        body.server_name = $('#dep-sni').value.trim();
+      }
       const res = await api(`/api/nodes/${n.id}/deploy`, { method: 'POST', body: JSON.stringify(body) });
       openTask(res.task.id);
     }
@@ -512,7 +585,23 @@ document.addEventListener('click', async e => {
   } catch (err) { toast('操作失败：' + err.message); }
 });
 
+// ---------- change delegation (detail view dynamic controls) ----------
+document.addEventListener('change', e => {
+  // protocol switch: Reality-only params show only for VLESS+Reality
+  if (e.target.id === 'dep-module') {
+    const r = $('#dep-reality');
+    if (r) r.classList.toggle('hidden', e.target.value !== 'vless-reality');
+  }
+  // ssh_port step unchecked → the new-port input is meaningless, disable it
+  if (e.target.classList && e.target.classList.contains('init-step') && e.target.value === 'ssh_port') {
+    const np = $('#d-newport');
+    if (np) np.disabled = !e.target.checked;
+  }
+});
+
 // ---------- boot ----------
+tzPickerFill('add-tz');
+tzPickerSet('add-tz', 'Asia/Shanghai');
 setInterval(() => { if (!$('#app-view').classList.contains('hidden') && !$$('.modal:not(.hidden)').length) refresh(); }, 10000);
 (async () => {
   try { await api('/api/me'); showApp(); refresh(); }

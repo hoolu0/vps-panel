@@ -98,3 +98,29 @@ curl -H "Authorization: Bearer $TOKEN" https://panel.example.com/api/nodes/node-
 ```bash
 curl -H "Authorization: Bearer $TOKEN" https://panel.example.com/api/v1/tasks/task-xxxx
 ```
+
+## 初始化模板（可勾选步骤）
+
+手动重跑初始化（Web 接口 `POST /api/nodes/{id}/init`）可带 `steps`
+数组只执行选中的步骤；不传或传空 = 全部步骤（接入后的自动初始化
+始终是全量）。未选中的步骤会在任务日志里逐项记为「未选择，跳过」。
+
+| step id | 含义 |
+|---|---|
+| `update` | 系统更新 |
+| `tools` | 常用工具 |
+| `timezone` | 时区 |
+| `timesync` | 时间同步 |
+| `ufw` | ufw 防火墙 |
+| `fail2ban` | fail2ban |
+| `ssh_port` | 修改 SSH 端口（需同时给 `new_ssh_port`） |
+| `bbr` | BBR |
+| `swap` | 小内存自动 swap |
+| `agent_autostart` | agent 开机自启 |
+
+```bash
+# 只跑 BBR 与时区两项
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -d '{"timezone":"Asia/Tokyo","steps":["bbr","timezone"]}' \
+  https://panel.example.com/api/nodes/node-xxxx/init
+```

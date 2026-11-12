@@ -58,14 +58,7 @@
         <label id="fld-key" class="hidden span2">私钥<textarea name="private_key" rows="5" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
         <label id="fld-keypass" class="hidden">私钥口令（可选）<input name="key_passphrase" type="password" autocomplete="off"></label>
         <label>时区（初始化时设置）
-          <input name="timezone" list="tz-list" value="Asia/Shanghai">
-          <datalist id="tz-list">
-            <option value="Asia/Shanghai"></option><option value="Asia/Hong_Kong"></option>
-            <option value="Asia/Tokyo"></option><option value="Asia/Singapore"></option>
-            <option value="UTC"></option><option value="Europe/London"></option>
-            <option value="Europe/Berlin"></option><option value="America/New_York"></option>
-            <option value="America/Los_Angeles"></option><option value="Australia/Sydney"></option>
-          </datalist>
+          <span class="tz-picker" id="add-tz"></span>
         </label>
         <label id="fld-newport">新 SSH 端口（初始化时修改，可空）<input name="new_ssh_port" type="number" placeholder="如 2222"></label>
         <label id="fld-runinit" class="check span2"><input type="checkbox" name="run_init" checked> 接入后自动执行初始化模板（更新/工具/时区/SSH端口/fail2ban/ufw/BBR/swap）</label>

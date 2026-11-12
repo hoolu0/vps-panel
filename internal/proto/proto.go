@@ -103,7 +103,25 @@ type InitParams struct {
 	Timezone   string `json:"timezone"`     // e.g. "Asia/Shanghai"
 	NewSSHPort int    `json:"new_ssh_port"` // 0 = keep current port
 	DryRun     bool   `json:"dry_run,omitempty"`
+	// Steps selects which template steps run (see the InitStep* ids).
+	// Empty/nil means all steps, keeping older callers (e.g. the
+	// automatic post-onboarding init) on the full template.
+	Steps []string `json:"steps,omitempty"`
 }
+
+// Initialization template step ids (InitParams.Steps).
+const (
+	InitStepUpdate         = "update"          // system package update/upgrade
+	InitStepTools          = "tools"           // common tools installation
+	InitStepTimezone       = "timezone"        // set timezone
+	InitStepTimesync       = "timesync"        // enable time synchronization
+	InitStepUFW            = "ufw"             // ufw firewall
+	InitStepFail2ban       = "fail2ban"        // fail2ban for sshd
+	InitStepSSHPort        = "ssh_port"        // change SSH port
+	InitStepBBR            = "bbr"             // enable BBR + fq
+	InitStepSwap           = "swap"            // add swap on small-memory hosts
+	InitStepAgentAutostart = "agent_autostart" // agent starts on boot
+)
 
 // DeployParams are the parameters of a protocol deployment task.
 type DeployParams struct {
@@ -116,7 +134,7 @@ type DeployParams struct {
 }
 
 // Version of the panel/agent build.
-const Version = "0.2.2"
+const Version = "0.3.0"
 
 // FinalizeParams are the parameters of the finalize_ssh task, sent by the
 // panel after it has verified the new SSH port is reachable.

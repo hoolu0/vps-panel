@@ -172,6 +172,56 @@ func FindTask(d *Data, id string) *TaskRec {
 	return nil
 }
 
+// probeTargetKey identifies a probe target by where it points, not by its
+// display fields: names and carriers are user-editable labels, while IP +
+// address family are what results are matched against.
+type probeTargetKey struct {
+	ip     string
+	family int
+}
+
+// probeTargetKeySet returns the IP+Family key set of a target list.
+func probeTargetKeySet(targets []proto.ProbeTarget) map[probeTargetKey]bool {
+	set := make(map[probeTargetKey]bool, len(targets))
+	for _, t := range targets {
+		set[probeTargetKey{ip: t.IP, family: t.Family}] = true
+	}
+	return set
+}
+
+// probeTargetSetsEqual reports whether two target lists point at the same
+// IP+Family set (renames/reorders do not count as a change).
+func probeTargetSetsEqual(a, b []proto.ProbeTarget) bool {
+	sa, sb := probeTargetKeySet(a), probeTargetKeySet(b)
+	if len(sa) != len(sb) {
+		return false
+	}
+	for k := range sa {
+		if !sb[k] {
+			return false
+		}
+	}
+	return true
+}
+
+// trimNodeProbes drops stored probe results whose target is not in keep,
+// for every node. Results that survive keep their values; a node whose
+// results are all dropped keeps an empty (non-nil) result list.
+func trimNodeProbes(d *Data, keep map[probeTargetKey]bool) {
+	for _, n := range d.Nodes {
+		if n.Probes == nil {
+			continue
+		}
+		kept := make([]proto.ProbeResult, 0, len(n.Probes.Results))
+		for _, r := range n.Probes.Results {
+			if keep[probeTargetKey{ip: r.IP, family: r.Family}] {
+				kept = append(kept, r)
+			}
+		}
+		n.Probes.Results = kept
+	}
+}
+
 // NewID returns a random hex id with a prefix.
 func NewID(prefix string) string {
 	var b [8]byte

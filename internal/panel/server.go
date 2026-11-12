@@ -772,10 +772,17 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		body.ProbeIntervalMin = 5
 	}
 	_ = s.store.Update(func(d *Data) {
+		targetsChanged := !probeTargetSetsEqual(d.ProbeTargets, body.ProbeTargets)
 		d.PublicAddr = body.PublicAddr
 		d.ProbeTargets = body.ProbeTargets
 		d.ProbeIntervalMin = body.ProbeIntervalMin
 		d.RouteSources = body.RouteSources
+		if targetsChanged {
+			// Prune stored results of targets that no longer exist, so
+			// node detail pages stop showing them immediately instead of
+			// whenever the agent's next probe report happens to land.
+			trimNodeProbes(d, probeTargetKeySet(body.ProbeTargets))
+		}
 	})
 	s.hub.PushProbeConfig("")
 	writeJSON(w, 200, map[string]any{"ok": true})

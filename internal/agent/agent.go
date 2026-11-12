@@ -62,6 +62,7 @@ type Agent struct {
 	probeMu      sync.RWMutex
 	probeTargets []proto.ProbeTarget
 	probeEvery   time.Duration
+	probeKick    chan struct{} // buffered(1): config change requests an immediate probe run
 
 	taskCh chan proto.Task
 }
@@ -79,6 +80,7 @@ func New(cfg Config) *Agent {
 		sb:           sb,
 		probeTargets: proto.DefaultProbeTargets(),
 		probeEvery:   5 * time.Minute,
+		probeKick:    make(chan struct{}, 1),
 		taskCh:       make(chan proto.Task, 16),
 	}
 }
@@ -175,14 +177,22 @@ func (a *Agent) session(ctx context.Context) error {
 			var pc proto.ProbeConfig
 			if err := json.Unmarshal(env.Data, &pc); err == nil {
 				a.probeMu.Lock()
-				if len(pc.Targets) > 0 {
-					a.probeTargets = pc.Targets
-				}
+				changed := !probeTargetSetsEqual(a.probeTargets, pc.Targets)
+				a.probeTargets = pc.Targets
 				if pc.IntervalMin > 0 {
 					a.probeEvery = time.Duration(pc.IntervalMin) * time.Minute
 				}
 				a.probeMu.Unlock()
 				log.Printf("probe config updated: %d targets, every %s", len(a.currentTargets()), a.probeEvery)
+				if changed {
+					// Probe right away so the panel reflects the new
+					// target set within seconds, not after a whole
+					// probe interval.
+					select {
+					case a.probeKick <- struct{}{}:
+					default:
+					}
+				}
 			}
 		}
 	}
@@ -192,6 +202,28 @@ func (a *Agent) currentTargets() []proto.ProbeTarget {
 	a.probeMu.RLock()
 	defer a.probeMu.RUnlock()
 	return append([]proto.ProbeTarget{}, a.probeTargets...)
+}
+
+// probeTargetSetsEqual reports whether two target lists point at the same
+// IP+Family set (renames/reorders do not count as a change).
+func probeTargetSetsEqual(a, b []proto.ProbeTarget) bool {
+	setOf := func(ts []proto.ProbeTarget) map[string]bool {
+		s := make(map[string]bool, len(ts))
+		for _, t := range ts {
+			s[fmt.Sprintf("%s|%d", t.IP, t.Family)] = true
+		}
+		return s
+	}
+	sa, sb := setOf(a), setOf(b)
+	if len(sa) != len(sb) {
+		return false
+	}
+	for k := range sa {
+		if !sb[k] {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *Agent) send(typ, taskID string, data any) error {
@@ -237,16 +269,22 @@ func (a *Agent) statusLoop(ctx context.Context) {
 func (a *Agent) probeLoop(ctx context.Context) {
 	// first probe shortly after connect
 	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	tick := func() {
+		a.runProbes()
+		a.probeMu.RLock()
+		every := a.probeEvery
+		a.probeMu.RUnlock()
+		timer.Reset(every)
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-a.probeKick:
+			tick()
 		case <-timer.C:
-			a.runProbes()
-			a.probeMu.RLock()
-			every := a.probeEvery
-			a.probeMu.RUnlock()
-			timer.Reset(every)
+			tick()
 		}
 	}
 }

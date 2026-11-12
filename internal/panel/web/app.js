@@ -38,7 +38,7 @@ function msCell(r) {
   const cls = r.avg_ms < 80 ? 'ms-good' : r.avg_ms < 180 ? 'ms-mid' : 'ms-bad';
   return `<span class="${cls}">${r.avg_ms.toFixed(0)} ms</span>` + (r.loss_pct > 0 ? ` <span class="muted small">丢${r.loss_pct.toFixed(0)}%</span>` : '');
 }
-const KIND_CN = { init: '初始化模板', finalize_ssh: 'SSH端口收尾', probe_now: '立即探测', deploy: '部署协议', undeploy: '卸载协议', restart_proto: '重启协议服务', sync: '同步' };
+const KIND_CN = { init: 'VPS初始化', finalize_ssh: 'SSH端口收尾', probe_now: '立即探测', deploy: '部署协议', undeploy: '卸载协议', restart_proto: '重启协议服务', sync: '同步' };
 const MODULE_CN = { 'vless-reality': 'VLESS + Reality', 'ss2022': 'Shadowsocks 2022' };
 const INIT_STEPS = [
   ['update', '系统更新'], ['tools', '常用工具'], ['timezone', '时区'], ['timesync', '时间同步'],
@@ -201,19 +201,6 @@ function renderDetail() {
     <div class="netline"><span>↓ <b>${fmtSpeed(st.net_in_speed)}</b></span><span>↑ <b>${fmtSpeed(st.net_out_speed)}</b></span><span>累计 ↓${fmtBytes(st.net_in_total)} ↑${fmtBytes(st.net_out_total)}</span></div></div>` : '<p class="muted">暂无状态数据（agent 离线）</p>'}
   </div>
 
-  <div class="panel-box"><h3>初始化模板</h3>
-    <div class="steps-grid">
-      ${INIT_STEPS.map(([sid, cn]) => `<label class="check"><input type="checkbox" class="init-step" value="${sid}" checked> ${cn}</label>`).join('')}
-    </div>
-    <div class="row" style="flex-wrap:wrap">
-      <span class="tz-picker" id="d-tz" style="flex:1 1 300px;max-width:460px"></span>
-      <input id="d-newport" type="number" placeholder="新 SSH 端口（可空）" value="${n.new_ssh_port || ''}" style="max-width:190px">
-      <button class="btn primary" data-action="init" ${n.online ? '' : 'disabled'}>执行初始化</button>
-      ${n.new_ssh_port && n.new_ssh_port !== n.ssh_port ? '<button class="btn" data-action="finalize">收尾：关闭旧 SSH 端口</button>' : ''}
-    </div>
-    <p class="muted small">勾选要执行的项目，未勾选的会跳过。修改 SSH 端口时先放行新端口再切换，面板验证可达后才关闭旧端口。</p>
-  </div>
-
   <div class="panel-box"><h3>协议部署（sing-box）</h3>
     <div id="dep-list">
     ${(n.deployments || []).map(d => `<div class="dep">
@@ -267,7 +254,23 @@ function renderDetail() {
     <pre id="route-result" class="logs hidden" style="margin-top:10px"></pre>
   </div>
 
-  <div class="panel-box"><h3>任务记录</h3><div id="task-list"><p class="muted">加载中…</p></div></div>`;
+  <div class="panel-box"><h3>任务记录</h3><div id="task-list"><p class="muted">加载中…</p></div></div>
+
+  <details class="panel-box init-box">
+    <summary>VPS初始化</summary>
+    <div class="init-body">
+      <div class="steps-grid">
+        ${INIT_STEPS.map(([sid, cn]) => `<label class="check"><input type="checkbox" class="init-step" value="${sid}" checked> ${cn}</label>`).join('')}
+      </div>
+      <div class="row" style="flex-wrap:wrap">
+        <span class="tz-picker" id="d-tz" style="flex:1 1 300px;max-width:460px"></span>
+        <input id="d-newport" type="number" placeholder="新 SSH 端口（可空）" value="${n.new_ssh_port || ''}" style="max-width:190px">
+        <button class="btn primary" data-action="init" ${n.online ? '' : 'disabled'}>执行VPS初始化</button>
+        ${n.new_ssh_port && n.new_ssh_port !== n.ssh_port ? '<button class="btn" data-action="finalize">收尾：关闭旧 SSH 端口</button>' : ''}
+      </div>
+      <p class="muted small">勾选要执行的项目，未勾选的会跳过。修改 SSH 端口时先放行新端口再切换，面板验证可达后才关闭旧端口。</p>
+    </div>
+  </details>`;
   tzPickerFill('d-tz');
   tzPickerSet('d-tz', n.timezone || 'Asia/Shanghai');
   loadTasks(n.id);
@@ -506,7 +509,7 @@ document.addEventListener('click', async e => {
     }
     else if (action === 'init') {
       const steps = $$('.init-step').filter(c => c.checked).map(c => c.value);
-      if (!steps.length) { toast('请至少勾选一个初始化项目'); return; }
+      if (!steps.length) { toast('请至少勾选一个VPS初始化项目'); return; }
       let newPort = 0;
       if (steps.includes('ssh_port')) {
         newPort = Number($('#d-newport').value) || 0;

@@ -478,7 +478,7 @@ func RunInit(p proto.InitParams, r *Runner) (map[string]any, error) {
 		}
 	}
 
-	r.logf("初始化模板执行完成")
+	r.logf("VPS初始化执行完成")
 	return result, nil
 }
 

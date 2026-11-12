@@ -61,7 +61,7 @@
           <span class="tz-picker" id="add-tz"></span>
         </label>
         <label id="fld-newport">新 SSH 端口（初始化时修改，可空）<input name="new_ssh_port" type="number" placeholder="如 2222"></label>
-        <label id="fld-runinit" class="check span2"><input type="checkbox" name="run_init" checked> 接入后自动执行初始化模板（更新/工具/时区/SSH端口/fail2ban/ufw/BBR/swap）</label>
+        <label id="fld-runinit" class="check span2"><input type="checkbox" name="run_init" checked> 接入后自动执行VPS初始化（更新/工具/时区/SSH端口/fail2ban/ufw/BBR/swap）</label>
       </div>
       <p class="muted small" id="add-ssh-hint">密码/私钥仅用于本次接入安装 agent，不会保存。</p>
       <p class="muted small hidden" id="add-manual-hint">手动安装不经过 SSH：创建节点后生成一条安装命令，在 VPS 上以 root 执行即可自动上线（适用于只有端口映射、没有 SSH 通道的 NAT 机器）。</p>

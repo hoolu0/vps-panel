@@ -141,6 +141,16 @@ label.block { margin-bottom: 12px; }
   padding: 16px; margin-bottom: 14px;
 }
 .panel-box h3 { margin: 0 0 12px; font-size: 15px; }
+/* collapsible init card (bottom of detail page, collapsed by default) */
+details.init-box { padding: 0; }
+details.init-box > summary {
+  list-style: none; cursor: pointer; padding: 16px;
+  font-size: 15px; font-weight: 600; user-select: none;
+}
+details.init-box > summary::-webkit-details-marker { display: none; }
+details.init-box > summary::after { content: '▾'; float: right; color: var(--muted); transition: transform .15s; }
+details.init-box[open ] > summary::after { transform: rotate(180deg); }
+details.init-box .init-body { padding: 0 16px 16px; }
 .kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px 18px; font-size: 13px; }
 .kv .k { color: var(--muted); }
 .dep {

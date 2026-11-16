@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -17,13 +18,43 @@ import (
 	"github.com/hoolu0/vps-panel/internal/proto"
 )
 
+// resolveTarget turns a configured probe target — an IP literal or a
+// domain name — into an IP string of the requested family. IP literals
+// pass through unchanged; domain names are resolved with a 3s timeout
+// and the first address of the requested family wins.
+func resolveTarget(host string, family int) (string, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		return host, nil
+	}
+	network := "ip4"
+	if family == 6 {
+		network = "ip6"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIP(ctx, network, host)
+	if err != nil || len(ips) == 0 {
+		return "", fmt.Errorf("域名 %s 无 IPv%d 记录或解析失败", host, family)
+	}
+	return ips[0].String(), nil
+}
+
 // ProbeTarget runs 3 ICMP echo probes against one target. It uses a raw
 // ICMP socket when permitted and falls back to the system ping binary.
+// The target may be an IP literal or a domain name; the result keeps the
+// configured string in IP (so the panel displays and keys on what the
+// user entered), while the probes run against the resolved address.
 func ProbeTarget(t proto.ProbeTarget) proto.ProbeResult {
 	res := proto.ProbeResult{Name: t.Name, Carrier: t.Carrier, IP: t.IP, Family: t.Family, AvgMs: -1}
-	avg, loss, err := icmpPing(t.IP, t.Family, 3)
+	ip, err := resolveTarget(t.IP, t.Family)
 	if err != nil {
-		avg, loss, err = execPing(t.IP, t.Family, 3)
+		res.Error = err.Error()
+		res.LossPct = 100
+		return res
+	}
+	avg, loss, err := icmpPing(ip, t.Family, 3)
+	if err != nil {
+		avg, loss, err = execPing(ip, t.Family, 3)
 	}
 	if err != nil {
 		res.Error = err.Error()

@@ -499,7 +499,7 @@ function renderTargetRows(targets) {
   $('#targets-table tbody').innerHTML = targets.map(t => `<tr>
     <td><input value="${esc(t.name)}" data-f="name"></td>
     <td><select data-f="carrier">${['CT','CU','CM','OTHER'].map(c => `<option ${c === t.carrier ? 'selected' : ''}>${c}</option>`).join('')}</select></td>
-    <td><input value="${esc(t.ip)}" data-f="ip" placeholder="IP 或域名"></td>
+    <td><input value="${esc(t.ip)}" data-f="ip" placeholder="IP/域名，可带 :端口"></td>
     <td><select data-f="family"><option value="4" ${t.family === 4 ? 'selected' : ''}>IPv4</option><option value="6" ${t.family === 6 ? 'selected' : ''}>IPv6</option></select></td>
     <td><button class="btn small danger" onclick="this.closest('tr').remove()">删</button></td></tr>`).join('');
 }

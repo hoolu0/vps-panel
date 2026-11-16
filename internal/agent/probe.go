@@ -3,26 +3,53 @@ package agent
 import (
 	"context"
 	"fmt"
+	"math"
 	"net"
-	"os"
-	"os/exec"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	"golang.org/x/net/icmp"
-	"golang.org/x/net/ipv4"
-	"golang.org/x/net/ipv6"
-
 	"github.com/hoolu0/vps-panel/internal/proto"
 )
 
-// resolveTarget turns a configured probe target — an IP literal or a
-// domain name — into an IP string of the requested family. IP literals
-// pass through unchanged; domain names are resolved with a 3s timeout
-// and the first address of the requested family wins.
-func resolveTarget(host string, family int) (string, error) {
+// defaultProbePort is used when a probe target carries no explicit port.
+const defaultProbePort = 80
+
+// parseTarget splits a configured probe target into the IP to dial and
+// the TCP port. The target may be "host", "host:port" or "[v6]:port";
+// host is an IP literal or a domain name resolved within the requested
+// family. A missing port defaults to 80. Bare IPv6 literals contain too
+// many colons for SplitHostPort and fall through as port-less hosts.
+func parseTarget(target string, family int) (ip string, port int, err error) {
+	target = strings.TrimSpace(target)
+	host := target
+	port = defaultProbePort
+	if h, p, serr := net.SplitHostPort(target); serr == nil {
+		n, cerr := strconv.Atoi(p)
+		if cerr != nil || n < 1 || n > 65535 {
+			return "", 0, fmt.Errorf("目标 %q 的端口 %q 不合法", target, p)
+		}
+		host, port = h, n
+	} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		// "[v6]" without a port: brackets are just grouping — strip
+		// them and keep the default port.
+		host = host[1 : len(host)-1]
+	}
+	if host == "" {
+		return "", 0, fmt.Errorf("目标 %q 缺少主机部分", target)
+	}
+	ip, err = resolveHost(host, family)
+	if err != nil {
+		return "", 0, err
+	}
+	return ip, port, nil
+}
+
+// resolveHost turns a host name — an IP literal or a domain name — into
+// an IP string of the requested family. IP literals pass through
+// unchanged; domain names are resolved with a 3s timeout and the first
+// address of the requested family wins.
+func resolveHost(host string, family int) (string, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		return host, nil
 	}
@@ -39,23 +66,22 @@ func resolveTarget(host string, family int) (string, error) {
 	return ips[0].String(), nil
 }
 
-// ProbeTarget runs 3 ICMP echo probes against one target. It uses a raw
-// ICMP socket when permitted and falls back to the system ping binary.
-// The target may be an IP literal or a domain name; the result keeps the
-// configured string in IP (so the panel displays and keys on what the
-// user entered), while the probes run against the resolved address.
+// ProbeTarget measures TCP connect latency to one target: 3 connect
+// attempts (2s timeout each), AvgMs is the mean connect time of the
+// successful attempts and LossPct the failed share. The target may be
+// an IP literal or a domain name, with an optional :port (default 80);
+// the result keeps the configured string in IP (so the panel displays
+// and keys on what the user entered), while the connects run against
+// the resolved address.
 func ProbeTarget(t proto.ProbeTarget) proto.ProbeResult {
 	res := proto.ProbeResult{Name: t.Name, Carrier: t.Carrier, IP: t.IP, Family: t.Family, AvgMs: -1}
-	ip, err := resolveTarget(t.IP, t.Family)
+	ip, port, err := parseTarget(t.IP, t.Family)
 	if err != nil {
 		res.Error = err.Error()
 		res.LossPct = 100
 		return res
 	}
-	avg, loss, err := icmpPing(ip, t.Family, 3)
-	if err != nil {
-		avg, loss, err = execPing(ip, t.Family, 3)
-	}
+	avg, loss, err := tcpProbe(ip, port, t.Family, 3)
 	if err != nil {
 		res.Error = err.Error()
 		res.LossPct = 100
@@ -75,95 +101,35 @@ func RunProbes(targets []proto.ProbeTarget) proto.ProbeReport {
 	return rep
 }
 
-func icmpPing(ipStr string, family, count int) (avgMs, lossPct float64, err error) {
-	ip := net.ParseIP(ipStr)
-	if ip == nil {
-		return 0, 100, fmt.Errorf("bad ip %q", ipStr)
-	}
-	network, protoNum := "ip4:icmp", 1
+// tcpProbe runs count TCP connects against ip:port and reports the mean
+// connect time of the successful ones plus the loss percentage. A
+// successful connect is closed immediately without sending any data.
+// It returns an error only when every attempt failed.
+func tcpProbe(ip string, port, family, count int) (avgMs, lossPct float64, err error) {
+	network := "tcp4"
 	if family == 6 {
-		network, protoNum = "ip6:ipv6-icmp", 58
+		network = "tcp6"
 	}
-	conn, err := icmp.ListenPacket(network, "")
-	if err != nil {
-		return 0, 100, err
-	}
-	defer conn.Close()
-
+	addr := net.JoinHostPort(ip, strconv.Itoa(port))
+	d := &net.Dialer{Timeout: 2 * time.Second}
 	var total float64
-	received := 0
-	id := os.Getpid() & 0xffff
-	for seq := 1; seq <= count; seq++ {
-		var msg icmp.Message
-		if family == 6 {
-			msg = icmp.Message{Type: ipv6.ICMPTypeEchoRequest, Code: 0, Body: &icmp.Echo{ID: id, Seq: seq, Data: []byte("vps-panel")}}
-		} else {
-			msg = icmp.Message{Type: ipv4.ICMPTypeEcho, Code: 0, Body: &icmp.Echo{ID: id, Seq: seq, Data: []byte("vps-panel")}}
-		}
-		b, err := msg.Marshal(nil)
-		if err != nil {
-			return 0, 100, err
-		}
+	succeeded := 0
+	var lastErr error
+	for i := 0; i < count; i++ {
 		start := time.Now()
-		if _, err := conn.WriteTo(b, &net.IPAddr{IP: ip}); err != nil {
+		conn, derr := d.DialContext(context.Background(), network, addr)
+		if derr != nil {
+			lastErr = derr
 			continue
 		}
-		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-		buf := make([]byte, 1500)
-		for {
-			n, _, err := conn.ReadFrom(buf)
-			if err != nil {
-				break
-			}
-			reply, err := icmp.ParseMessage(protoNum, buf[:n])
-			if err != nil {
-				continue
-			}
-			if echo, ok := reply.Body.(*icmp.Echo); ok && echo.Seq == seq &&
-				(reply.Type == ipv4.ICMPTypeEchoReply || reply.Type == ipv6.ICMPTypeEchoReply) {
-				total += float64(time.Since(start).Microseconds()) / 1000.0
-				received++
-				break
-			}
-		}
+		total += float64(time.Since(start).Microseconds()) / 1000.0
+		succeeded++
+		_ = conn.Close()
 	}
-	if received == 0 {
-		return 0, 100, fmt.Errorf("no reply from %s", ipStr)
+	if succeeded == 0 {
+		return -1, 100, fmt.Errorf("TCP 连接失败：%v", lastErr)
 	}
-	loss := float64(count-received) / float64(count) * 100
-	return total / float64(received), loss, nil
-}
-
-var rttRe = regexp.MustCompile(`rtt min/avg/max[^=]*= [0-9.]+/([0-9.]+)/`)
-var lossRe = regexp.MustCompile(`([0-9.]+)% packet loss`)
-
-func execPing(ipStr string, family, count int) (avgMs, lossPct float64, err error) {
-	pingBin, err := exec.LookPath("ping")
-	if err != nil {
-		return 0, 100, fmt.Errorf("icmp socket unavailable and no ping binary")
-	}
-	args := []string{"-n", "-c", strconv.Itoa(count), "-W", "2", "-i", "0.2"}
-	if family == 6 {
-		args = append(args, "-6")
-	}
-	args = append(args, ipStr)
-	out, _ := exec.Command(pingBin, args...).CombinedOutput()
-	s := string(out)
-	if m := rttRe.FindStringSubmatch(s); m != nil {
-		avgMs, _ = strconv.ParseFloat(m[1], 64)
-		if m2 := lossRe.FindStringSubmatch(s); m2 != nil {
-			lossPct, _ = strconv.ParseFloat(m2[1], 64)
-		}
-		return avgMs, lossPct, nil
-	}
-	if strings.Contains(s, "Operation not permitted") {
-		return 0, 100, fmt.Errorf("ping 需要 CAP_NET_RAW 权限")
-	}
-	if m := lossRe.FindStringSubmatch(s); m != nil {
-		lossPct, _ = strconv.ParseFloat(m[1], 64)
-		if lossPct >= 100 {
-			return 0, 100, fmt.Errorf("no reply from %s", ipStr)
-		}
-	}
-	return 0, 100, fmt.Errorf("no reply from %s", ipStr)
+	avg := math.Round(total/float64(succeeded)*10) / 10
+	loss := math.Round(float64(count-succeeded)/float64(count)*1000) / 10
+	return avg, loss, nil
 }

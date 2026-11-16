@@ -34,7 +34,15 @@ function bar(used, total) {
   return `<div class="bar"><div class="${cls}" style="width:${p}%"></div></div>`;
 }
 function msCell(r) {
-  if (!r || r.avg_ms < 0) return '<span class="ms-bad">超时</span>';
+  if (!r || r.avg_ms < 0) {
+    let h = '<span class="ms-bad">超时</span>';
+    if (r && r.error) {
+      const e = String(r.error);
+      const short = e.length > 60 ? e.slice(0, 60) + '…' : e;
+      h += `<div class="muted small" title="${esc(e)}">${esc(short)}</div>`;
+    }
+    return h;
+  }
   const cls = r.avg_ms < 80 ? 'ms-good' : r.avg_ms < 180 ? 'ms-mid' : 'ms-bad';
   return `<span class="${cls}">${r.avg_ms.toFixed(0)} ms</span>` + (r.loss_pct > 0 ? ` <span class="muted small">丢${r.loss_pct.toFixed(0)}%</span>` : '');
 }
@@ -240,7 +248,7 @@ function renderDetail() {
     <span class="muted">${esc(n.ip)}${n.ssh_port ? ' · SSH 端口 ' + n.ssh_port : ' · 手动安装'}</span>
     ${n.online ? '<span class="badge">在线</span>' : '<span class="badge">离线</span>'}
     <span style="flex:1"></span>
-    ${neverSeen ? '<button class="btn" data-action="install-cmd">查看安装命令</button>' : ''}
+    <button class="btn" data-action="install-cmd">${neverSeen ? '查看安装命令' : '更新 agent'}</button>
     <button class="btn danger" data-action="delete-node">删除节点</button>
   </div>
 

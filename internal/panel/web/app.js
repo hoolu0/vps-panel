@@ -92,6 +92,7 @@ let nodes = [];
 let currentNodeId = null;
 let settings = null;
 let taskTimer = null;
+let detailFormSnap = null; // detail-page form state, kept across auto-refresh re-renders
 
 // ---------- auth ----------
 function showLogin() {
@@ -164,12 +165,67 @@ function renderGrid() {
 }
 function curNode() { return nodes.find(n => n.id === currentNodeId); }
 
+// ---------- detail form state preservation ----------
+// renderDetail() rebuilds the whole detail DOM on every refresh (10s
+// auto-refresh included); without this snapshot, in-progress edits — init
+// step checkboxes, timezone, new SSH port, the deploy form — would snap
+// back to defaults while the user is still editing. Snapshot the form
+// before the rebuild, restore it right after, but only for the same node.
+function captureDetailForm(nodeId) {
+  const tzBox = document.getElementById('d-tz');
+  const val = id => { const e = $(id); return e ? e.value : ''; };
+  return { nodeId,
+    steps: $$('.init-step').filter(c => c.checked).map(c => c.value),
+    tzSel: tzBox && $('.tz-sel', tzBox) ? $('.tz-sel', tzBox).value : '',
+    tzCustom: tzBox && $('.tz-custom', tzBox) ? $('.tz-custom', tzBox).value : '',
+    newport: val('#d-newport'),
+    depModule: val('#dep-module'), depPort: val('#dep-port'),
+    depPubhost: val('#dep-pubhost'), depPubport: val('#dep-pubport'),
+    depDest: val('#dep-dest'), depSni: val('#dep-sni'),
+    routeSource: val('#route-source'),
+    initOpen: !!($('.init-box') && $('.init-box').open),
+  };
+}
+function restoreDetailForm(snap) {
+  $$('.init-step').forEach(c => { c.checked = snap.steps.includes(c.value); });
+  const np = $('#d-newport');
+  if (np) { np.value = snap.newport; np.disabled = !snap.steps.includes('ssh_port'); }
+  const tzBox = document.getElementById('d-tz');
+  if (tzBox && $('.tz-sel', tzBox) && snap.tzSel) {
+    $('.tz-sel', tzBox).value = snap.tzSel;
+    $('.tz-custom', tzBox).value = snap.tzCustom;
+    tzPickerSync('d-tz');
+  }
+  const dm = $('#dep-module');
+  if (dm && snap.depModule) {
+    dm.value = snap.depModule;
+    const r = $('#dep-reality');
+    if (r) r.classList.toggle('hidden', dm.value !== 'vless-reality');
+  }
+  const set = (id, v) => { const e = $(id); if (e) e.value = v; };
+  set('#dep-port', snap.depPort); set('#dep-pubhost', snap.depPubhost);
+  set('#dep-pubport', snap.depPubport); set('#dep-dest', snap.depDest);
+  set('#dep-sni', snap.depSni);
+  const ib = $('.init-box');
+  if (ib) ib.open = snap.initOpen;
+  // #route-source is restored in loadRouteSources(), once its options exist
+}
+
 // ---------- node detail ----------
 function renderDetail() {
   const n = curNode();
-  if (!n) { currentNodeId = null; renderGrid(); return; }
-  $('#node-grid').classList.add('hidden');
+  if (!n) { detailFormSnap = null; currentNodeId = null; renderGrid(); return; }
   const el = $('#node-detail');
+  // If the visible detail DOM belongs to this same node, snapshot its form
+  // state before the rebuild wipes it; if it belongs to another node, the
+  // user switched nodes and any old snapshot must not leak into this one.
+  if (!el.classList.contains('hidden') && el.dataset.nodeId === n.id) {
+    detailFormSnap = captureDetailForm(n.id);
+  } else if (detailFormSnap && detailFormSnap.nodeId !== n.id) {
+    detailFormSnap = null;
+  }
+  $('#node-grid').classList.add('hidden');
+  el.dataset.nodeId = n.id;
   el.classList.remove('hidden');
   const st = n.status || {};
   const neverSeen = !n.last_seen || String(n.last_seen).startsWith('0001');
@@ -273,6 +329,7 @@ function renderDetail() {
   </details>`;
   tzPickerFill('d-tz');
   tzPickerSet('d-tz', n.timezone || 'Asia/Shanghai');
+  if (detailFormSnap && detailFormSnap.nodeId === n.id) restoreDetailForm(detailFormSnap);
   loadTasks(n.id);
   loadRouteSources();
 }
@@ -297,6 +354,10 @@ async function loadRouteSources() {
     const sel = $('#route-source');
     if (!sel) return;
     sel.innerHTML = (s.route_sources || []).map(rs => `<option value="${rs.id}">${esc(rs.name)}</option>`).join('') || '<option value="">（在设置中添加数据源）</option>';
+    if (detailFormSnap && detailFormSnap.nodeId === currentNodeId && detailFormSnap.routeSource &&
+        Array.from(sel.options).some(o => o.value === detailFormSnap.routeSource)) {
+      sel.value = detailFormSnap.routeSource;
+    }
   } catch (e) { /* ignore */ }
 }
 
@@ -500,12 +561,12 @@ document.addEventListener('click', async e => {
   const action = t.dataset.action;
   const n = curNode();
   try {
-    if (action === 'open') { currentNodeId = t.dataset.id; renderDetail(); }
-    else if (action === 'back') { currentNodeId = null; renderGrid(); }
+    if (action === 'open') { detailFormSnap = null; currentNodeId = t.dataset.id; renderDetail(); }
+    else if (action === 'back') { detailFormSnap = null; currentNodeId = null; renderGrid(); }
     else if (action === 'delete-node') {
       if (!confirm('确定删除节点 ' + n.name + '？（不会卸载远端 agent）')) return;
       await api('/api/nodes/' + n.id, { method: 'DELETE' });
-      currentNodeId = null; toast('已删除'); refresh();
+      detailFormSnap = null; currentNodeId = null; toast('已删除'); refresh();
     }
     else if (action === 'init') {
       const steps = $$('.init-step').filter(c => c.checked).map(c => c.value);

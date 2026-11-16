@@ -86,13 +86,26 @@ func New(cfg Config) *Agent {
 }
 
 // Run connects to the panel and reconnects forever until ctx is done.
+// Reconnect backoff doubles from 2s up to 15s, but a session that stayed
+// alive for at least stableSession resets it to 2s — a long-lived agent
+// that blips once must not sit out the maximum backoff.
 func (a *Agent) Run(ctx context.Context) {
-	backoff := 2 * time.Second
+	const (
+		minBackoff    = 2 * time.Second
+		maxBackoff    = 15 * time.Second
+		stableSession = 2 * time.Minute
+	)
+	backoff := minBackoff
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := a.session(ctx); err != nil {
+		start := time.Now()
+		err := a.session(ctx)
+		if time.Since(start) >= stableSession {
+			backoff = minBackoff
+		}
+		if err != nil {
 			log.Printf("panel connection lost: %v (retry in %s)", err, backoff)
 		}
 		select {
@@ -101,8 +114,8 @@ func (a *Agent) Run(ctx context.Context) {
 		case <-time.After(backoff):
 		}
 		backoff *= 2
-		if backoff > 60*time.Second {
-			backoff = 60 * time.Second
+		if backoff > maxBackoff {
+			backoff = maxBackoff
 		}
 	}
 }

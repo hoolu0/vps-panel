@@ -27,23 +27,35 @@ func (c *agentConn) send(env proto.Envelope) error {
 	return c.conn.WriteJSON(env)
 }
 
+// offlineGrace is how long a node still counts as online after its agent
+// connection drops, so brief reconnect blips don't flap the UI to offline.
+// Package-level var so tests can shrink it.
+var offlineGrace = 90 * time.Second
+
 // Hub tracks live agent connections and dispatches tasks.
 type Hub struct {
-	store *Store
-	mu    sync.Mutex
-	conns map[string]*agentConn
+	store     *Store
+	mu        sync.Mutex
+	conns     map[string]*agentConn
+	downSince map[string]time.Time
 }
 
 func newHub(store *Store) *Hub {
-	return &Hub{store: store, conns: map[string]*agentConn{}}
+	return &Hub{store: store, conns: map[string]*agentConn{}, downSince: map[string]time.Time{}}
 }
 
-// Online reports whether the node's agent is connected.
+// Online reports whether the node's agent counts as online: a live
+// connection, or a disconnect still inside the grace window.
 func (h *Hub) Online(nodeID string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	_, ok := h.conns[nodeID]
-	return ok
+	if _, ok := h.conns[nodeID]; ok {
+		return true
+	}
+	if t, ok := h.downSince[nodeID]; ok {
+		return time.Since(t) < offlineGrace
+	}
+	return false
 }
 
 func (h *Hub) register(c *agentConn) {
@@ -53,6 +65,7 @@ func (h *Hub) register(c *agentConn) {
 		_ = old.conn.Close() // kick the stale connection
 	}
 	h.conns[c.nodeID] = c
+	delete(h.downSince, c.nodeID)
 }
 
 func (h *Hub) unregister(c *agentConn) {
@@ -60,7 +73,16 @@ func (h *Hub) unregister(c *agentConn) {
 	defer h.mu.Unlock()
 	if cur, ok := h.conns[c.nodeID]; ok && cur == c {
 		delete(h.conns, c.nodeID)
+		h.downSince[c.nodeID] = time.Now()
 	}
+}
+
+// forget drops any offline-grace record for a node (used when a node is
+// deleted, so its entry doesn't linger).
+func (h *Hub) forget(nodeID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.downSince, nodeID)
 }
 
 func (h *Hub) get(nodeID string) *agentConn {

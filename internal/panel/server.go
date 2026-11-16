@@ -507,6 +507,7 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 	if c := s.hub.get(id); c != nil {
 		_ = c.conn.Close()
 	}
+	s.hub.forget(id)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 

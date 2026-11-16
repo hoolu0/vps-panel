@@ -264,15 +264,31 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	defer s.hub.unregister(ac)
 	defer conn.Close()
 
-	conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+	// Liveness: the connection counts as dead only after 120s of total
+	// silence. The agent pings every 30s, but gorilla's default ping
+	// handler merely pongs back without touching the read deadline, and
+	// the PongHandler never fires because the panel itself never pings —
+	// so without the handlers below every connection was killed by the
+	// read deadline exactly 120s after connect. Extend the deadline when
+	// a ping arrives (before ponging) and on every successful read.
+	extendDeadline := func() {
+		_ = conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+	}
+	extendDeadline()
 	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+		extendDeadline()
+		return nil
+	})
+	conn.SetPingHandler(func(appData string) error {
+		extendDeadline()
+		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(10*time.Second))
 	})
 	for {
 		var env proto.Envelope
 		if err := conn.ReadJSON(&env); err != nil {
 			return
 		}
+		extendDeadline()
 		switch env.Type {
 		case proto.MsgHello:
 			s.hub.onHello(node.ID, env.Data)
@@ -789,9 +805,22 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
+// tokenView is the API-facing shape of an APIToken: the hash is a
+// credential equivalent and never leaves the server.
+func tokenView(t *APIToken) map[string]any {
+	return map[string]any{
+		"id": t.ID, "name": t.Name, "prefix": t.Prefix,
+		"created_at": t.CreatedAt, "last_used_at": t.LastUsedAt,
+	}
+}
+
 func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
-	out := []*APIToken{}
-	s.store.View(func(d *Data) { out = append(out, d.APITokens...) })
+	out := []map[string]any{}
+	s.store.View(func(d *Data) {
+		for _, t := range d.APITokens {
+			out = append(out, tokenView(t))
+		}
+	})
 	writeJSON(w, 200, map[string]any{"tokens": out})
 }
 
@@ -809,7 +838,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		Prefix: raw[:10], CreatedAt: time.Now(),
 	}
 	_ = s.store.Update(func(d *Data) { d.APITokens = append(d.APITokens, rec) })
-	writeJSON(w, 200, map[string]any{"token": raw, "record": rec})
+	writeJSON(w, 200, map[string]any{"token": raw, "record": tokenView(rec)})
 }
 
 func (s *Server) handleDeleteToken(w http.ResponseWriter, r *http.Request) {

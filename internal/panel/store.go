@@ -57,7 +57,7 @@ type TaskRec struct {
 type APIToken struct {
 	ID         string    `json:"id"`
 	Name       string    `json:"name"`
-	Hash       string    `json:"-"`
+	Hash       string    `json:"hash"`
 	Prefix     string    `json:"prefix"`
 	CreatedAt  time.Time `json:"created_at"`
 	LastUsedAt time.Time `json:"last_used_at,omitempty"`
